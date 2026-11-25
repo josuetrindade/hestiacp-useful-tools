@@ -64,8 +64,8 @@ Re-running any installer is idempotent and preserves your existing `/etc/hestiac
 
 | Option | Default | Description |
 |---|---|---|
-| `ENABLED` | `"yes"` | Master toggle (`"yes"` or `"no"`). |
-| `SCOPE` | `"user"` | `"user"` allows forwarding only to mail domains owned by the same HestiaCP user (prevents cross-tenant domain discovery). `"server"` allows any mail domain hosted on the server (`/etc/exim4/domains/`). |
+| `ENABLED` | `"yes"` | Master toggle (`"yes"` or `"no"`). Unreadable existing config files or unrecognized non-empty `ENABLED` values fail closed (`enabled=true`) in helper guards. |
+| `SCOPE` | `"user"` | `"user"` allows forwarding only to active mail domains owned by the same HestiaCP user (prevents cross-tenant domain discovery). `"server"` queries active (non-suspended) users and mail domains via `v-list-users` + `v-list-mail-domains` first, falling back to `/etc/exim4/domains/` only when CLI enumeration is unavailable. |
 | `BLOCK_CATCHALL` | `"yes"` | Also blocks external addresses in domain Catch-All settings. |
 | `ENFORCE_API` | `"yes"` | Enforces the same rule for non-admin REST API keys when `API_SYSTEM=2`. |
 | `ENABLE_UI_HINT` | `"yes"` | Displays an informational hint under `Forward to` and `Catch-All Email` for non-admin users. |
@@ -77,7 +77,7 @@ Re-running any installer is idempotent and preserves your existing `/etc/hestiac
 
 - **Administrators & Impersonation:** HestiaCP preserves `$_SESSION["userContext"] === "admin"` when an admin impersonates a client via "Log in as ...". An admin can add an external forward or Catch-All for any client at any time.
 - **Preserving Existing Exceptions:** When a non-admin user edits a mailbox that already has an admin-approved external forward, only **newly added** forward addresses are checked. The user can update their password, quota, aliases, auto-reply, or remove the external forward without errors.
-- **Blackhole Allowed:** `:blackhole:` ("Discard all mail") is always allowed.
+- **Blackhole Allowed:** `:blackhole:` ("Discard all mail") is permitted for mail account forwards and rejected for Catch-All redirects.
 - **No Orphaned Mailboxes:** When creating a new mail account, forwarding targets are validated before `v-add-mail-account` executes.
 
 ---
@@ -105,7 +105,7 @@ v-mail-forward-policy --apply
 v-mail-forward-policy --disable
 ```
 
-`v-security-audit --system` also checks for active external account forwards and Catch-All redirects (`S67`), and `v-harden-server --cron-heal` checks `v-mail-forward-policy --status` daily at `04:50` (logging a warning if hooks are missing when no version hold is active).
+`v-security-audit --system` also checks for active external account forwards, Catch-All redirects, `~/.forward` files, and Dovecot Sieve redirect rules (`S67`, skipping suspended users/domains and symlinks), and `v-harden-server --cron-heal` checks `v-mail-forward-policy --status` daily at `04:50` (logging a warning if hooks are missing when no version hold or native `1.11.0+` support is active).
 
 ---
 
@@ -115,6 +115,7 @@ v-mail-forward-policy --disable
   - Standalone installations install `/etc/apt/apt.conf.d/99hestia-mail-forward-policy` (only when the repository tree and all ancestor directories up to `/` are root-owned, symlink-free, and non-group/world-writable), which runs `install.sh --mail-forward-policy --apt-hook` automatically.
   - Full-toolkit installations use `/etc/apt/apt.conf.d/99hestia-custom-patches`, which covers `mail-forward-policy` alongside `backup-core-patches` and `nginx-txt-nocache` (the redundant standalone hook file is automatically removed).
   - Both hooks enforce `scripts/lib/version-gate.sh`: on matching HestiaCP `1.10.10`, hooks are refreshed automatically; on an untested HestiaCP version, core PHP mutations are safely placed on hold and an admin notification/email is sent once.
+  - **Coexistence with HestiaCP `1.11.0+` native support:** When upgrading to HestiaCP `1.11.0+` (which defines `hst_validate_mail_forward_policy` natively in core), the installer detects native support automatically, preserves the native helper and core files, skips duplicate hook injection, removes any obsolete toolkit `mail-forward-policy-ui.php`, and advises migrating `/etc/hestiacp-mail-forward-policy.conf` (`ENABLED="yes"`) to native `POLICY_USER_EXTERNAL_MAIL_FORWARD`.
 - **Disabling Permanently:** On full-toolkit installations where `99hestia-custom-patches` re-applies core modules after APT upgrades, set `ENABLED="no"` in `/etc/hestiacp-mail-forward-policy.conf` if you want the policy to remain inactive across future updates. Running `v-mail-forward-policy --disable` restores all core PHP files cleanly and removes the standalone APT hook (`99hestia-mail-forward-policy`).
 - **Recommended Quota Hardening (`MAIL_DOMAINS`):** HestiaCP's `v-add-mail-domain` only checks whether another local user owns a domain, without DNS/MX verification. Do not leave non-admin users with `MAIL_DOMAINS='unlimited'`; set per-user `MAIL_DOMAINS` limits matching their actual domain count (`v-change-user-config-value <user> MAIL_DOMAINS <count>`) so a client cannot temporarily add an external domain (such as `gmail.com`), create a forward to it, and delete it afterwards.
 - **Direct CLI & Backup Restore:** `v-add-mail-account-forward` and `v-restore-user` run as `root` and are not blocked at write time; monitor restored or legacy redirects with `v-mail-forward-policy --audit` and `v-security-audit --system` (`S67`).
