@@ -408,27 +408,60 @@ function hst_mfp_is_user_admin(string $username): bool {
 function hst_mfp_format_error(array $blocked, string $scope, string $context_label): string {
 	$list = implode(", ", $blocked);
 	$list = preg_replace('/[\x00-\x1f\x7f]/', "", $list) ?? "";
+	$has_gettext = function_exists("_");
 
-	$scope_hint =
-		$scope === "server"
-			? "Only email addresses belonging to mail domains hosted on this server are permitted."
-			: "Only email addresses belonging to your own mail domains on this account are permitted.";
-
-	$action_label =
-		$context_label === "catchall"
-			? "External catch-all forwarding is disabled by server policy to protect server mail deliverability"
-			: "External mail forwarding is disabled by server policy to protect server mail deliverability";
-
-	$guidance =
-		"To read messages in Gmail, Outlook, or a mobile app, connect the mailbox via IMAP/SMTP instead of forwarding, or ask the server administrator to configure an exception.";
-
-	if (function_exists("_")) {
-		$action_label = _($action_label);
-		$scope_hint = _($scope_hint);
-		$guidance = _($guidance);
+	if ($context_label === "catchall") {
+		if ($scope === "server") {
+			return $has_gettext
+				? sprintf(
+					_(
+						"External catch-all forwarding is disabled by server policy to protect server mail deliverability (%s). Only email addresses belonging to mail domains hosted on this server are permitted. To read messages in Gmail, Outlook, or a mobile app, connect the mailbox via IMAP/SMTP instead of forwarding, or ask the server administrator to configure an exception.",
+					),
+					$list,
+				)
+				: sprintf(
+					"External catch-all forwarding is disabled by server policy to protect server mail deliverability (%s). Only email addresses belonging to mail domains hosted on this server are permitted. To read messages in Gmail, Outlook, or a mobile app, connect the mailbox via IMAP/SMTP instead of forwarding, or ask the server administrator to configure an exception.",
+					$list,
+				);
+		}
+		return $has_gettext
+			? sprintf(
+				_(
+					"External catch-all forwarding is disabled by server policy to protect server mail deliverability (%s). Only email addresses belonging to your own mail domains on this account are permitted. To read messages in Gmail, Outlook, or a mobile app, connect the mailbox via IMAP/SMTP instead of forwarding, or ask the server administrator to configure an exception.",
+				),
+				$list,
+			)
+			: sprintf(
+				"External catch-all forwarding is disabled by server policy to protect server mail deliverability (%s). Only email addresses belonging to your own mail domains on this account are permitted. To read messages in Gmail, Outlook, or a mobile app, connect the mailbox via IMAP/SMTP instead of forwarding, or ask the server administrator to configure an exception.",
+				$list,
+			);
 	}
 
-	return $action_label . " (" . $list . "). " . $scope_hint . " " . $guidance;
+	if ($scope === "server") {
+		return $has_gettext
+			? sprintf(
+				_(
+					"External mail forwarding is disabled by server policy to protect server mail deliverability (%s). Only email addresses belonging to mail domains hosted on this server are permitted. To read messages in Gmail, Outlook, or a mobile app, connect the mailbox via IMAP/SMTP instead of forwarding, or ask the server administrator to configure an exception.",
+				),
+				$list,
+			)
+			: sprintf(
+				"External mail forwarding is disabled by server policy to protect server mail deliverability (%s). Only email addresses belonging to mail domains hosted on this server are permitted. To read messages in Gmail, Outlook, or a mobile app, connect the mailbox via IMAP/SMTP instead of forwarding, or ask the server administrator to configure an exception.",
+				$list,
+			);
+	}
+
+	return $has_gettext
+		? sprintf(
+			_(
+				"External mail forwarding is disabled by server policy to protect server mail deliverability (%s). Only email addresses belonging to your own mail domains on this account are permitted. To read messages in Gmail, Outlook, or a mobile app, connect the mailbox via IMAP/SMTP instead of forwarding, or ask the server administrator to configure an exception.",
+			),
+			$list,
+		)
+		: sprintf(
+			"External mail forwarding is disabled by server policy to protect server mail deliverability (%s). Only email addresses belonging to your own mail domains on this account are permitted. To read messages in Gmail, Outlook, or a mobile app, connect the mailbox via IMAP/SMTP instead of forwarding, or ask the server administrator to configure an exception.",
+			$list,
+		);
 }
 
 /**

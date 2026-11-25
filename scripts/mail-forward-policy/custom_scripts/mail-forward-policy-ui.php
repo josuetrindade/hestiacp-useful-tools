@@ -40,23 +40,25 @@ if (empty($hst_mfp_cfg["enabled"]) || empty($hst_mfp_cfg["enable_ui_hint"])) {
 	return;
 }
 
-$hst_mfp_lang = strtolower((string) ($_SESSION["language"] ?? "en"));
-$hst_mfp_is_pt = str_starts_with($hst_mfp_lang, "pt");
+$hst_mfp_has_gettext = function_exists("_");
 $hst_mfp_is_server_scope = ($hst_mfp_cfg["scope"] ?? "user") === "server";
 
-if ($hst_mfp_is_pt) {
-	$hst_mfp_fwd_hint = $hst_mfp_is_server_scope
-		? "Politica do servidor: apenas sao permitidos reencaminhamentos para dominios de email alojados neste servidor. Para ler email no Gmail, Outlook ou telemovel, configure via IMAP/SMTP usando os dados do painel lateral."
-		: "Politica do servidor: apenas sao permitidos reencaminhamentos para os seus proprios dominios de email. Para ler email no Gmail, Outlook ou telemovel, configure via IMAP/SMTP usando os dados do painel lateral.";
-	$hst_mfp_catchall_hint =
-		"Politica do servidor: enderecos externos nao sao permitidos no Catch-All. Utilize uma caixa interna ou contacte o administrador.";
-} else {
-	$hst_mfp_fwd_hint = $hst_mfp_is_server_scope
-		? "Server policy: forwarding is restricted to mail domains hosted on this server. To read mail in Gmail, Outlook, or mobile apps, connect via IMAP/SMTP using the settings panel."
-		: "Server policy: forwarding is restricted to your own mail domains. To read mail in Gmail, Outlook, or mobile apps, connect via IMAP/SMTP using the settings panel.";
-	$hst_mfp_catchall_hint =
-		"Server policy: external addresses are not allowed for Catch-All. Use an internal mailbox or contact the administrator.";
-}
+$hst_mfp_fwd_hint = $hst_mfp_is_server_scope
+	? ($hst_mfp_has_gettext
+		? _(
+			"Server policy: forwarding is restricted to mail domains hosted on this server. To read mail in Gmail, Outlook, or mobile apps, connect via IMAP/SMTP using the settings panel.",
+		)
+		: "Server policy: forwarding is restricted to mail domains hosted on this server. To read mail in Gmail, Outlook, or mobile apps, connect via IMAP/SMTP using the settings panel.")
+	: ($hst_mfp_has_gettext
+		? _(
+			"Server policy: forwarding is restricted to your own mail domains. To read mail in Gmail, Outlook, or mobile apps, connect via IMAP/SMTP using the settings panel.",
+		)
+		: "Server policy: forwarding is restricted to your own mail domains. To read mail in Gmail, Outlook, or mobile apps, connect via IMAP/SMTP using the settings panel.");
+$hst_mfp_catchall_hint = $hst_mfp_has_gettext
+	? _(
+		"Server policy: external addresses are not allowed for Catch-All. Use an internal mailbox or contact the administrator.",
+	)
+	: "Server policy: external addresses are not allowed for Catch-All. Use an internal mailbox or contact the administrator.";
 
 $hst_mfp_payload = json_encode(
 	[
@@ -89,8 +91,7 @@ unset(
 	$hst_mfp_req_path,
 	$hst_mfp_inc,
 	$hst_mfp_cfg,
-	$hst_mfp_lang,
-	$hst_mfp_is_pt,
+	$hst_mfp_has_gettext,
 	$hst_mfp_is_server_scope,
 	$hst_mfp_fwd_hint,
 	$hst_mfp_catchall_hint,
