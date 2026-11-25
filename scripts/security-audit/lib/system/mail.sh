@@ -239,6 +239,7 @@ check_dns_mail_advanced() {
         return
     fi
 
+    local hestia_root="${HESTIA:-/usr/local/hestia}"
     local checked_domains=0
     local dmarc_configured=0
     for user in $(hestia_user_list); do

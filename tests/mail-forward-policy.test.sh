@@ -492,12 +492,13 @@ result_critical() { printf 'CRIT:%s:%s\n' "\$1" "\$2"; }
 EOF
 cat "$REPO_ROOT/scripts/security-audit/lib/system/mail.sh" >> "$S67_SCRIPT"
 
-s67_warn=$(HESTIA="$HESTIA_FIX" HESTIA_HOME_ROOT="$HOME_FIX" EXIM_DOMAINS_DIR="$EXIM_FIX" bash -c "source '$S67_SCRIPT'; check_mail" 2>&1)
+s67_warn=$(HESTIA="$HESTIA_FIX" HESTIA_HOME_ROOT="$HOME_FIX" EXIM_DOMAINS_DIR="$EXIM_FIX" bash -uc "set -uo pipefail; source '$S67_SCRIPT'; check_mail; command_exists() { [ \"\$1\" = \"dig\" ]; }; dig() { printf 'v=DMARC1\n'; }; check_dns_mail_advanced" 2>&1)
 if printf '%s\n' "$s67_warn" | grep -q '^WARN:S67:Found 4 external mail forward/catch-all' && \
-   printf '%s\n' "$s67_warn" | grep -q ', '; then
-    pass "v-security-audit S67 warns on external account, catch-all, .forward, and Sieve targets with comma-space samples"
+   printf '%s\n' "$s67_warn" | grep -q ', ' && \
+   printf '%s\n' "$s67_warn" | grep -q '^PASS:S59:DMARC configured'; then
+    pass "v-security-audit S67 & S59 pass under set -uo pipefail and S67 warns with comma-space samples"
 else
-    fail "v-security-audit S67 did not warn as expected: $s67_warn"
+    fail "v-security-audit S67/S59 failed under set -uo pipefail: $s67_warn"
 fi
 
 rm -f "$HOME_FIX/user2/.forward" "$HOME_FIX/user1/mail/user1.example/sales/sieve/custom.sieve"
@@ -507,7 +508,7 @@ EOF
 cat > "$HESTIA_FIX/data/users/user1/mail/user1.example.conf" << 'EOF'
 ACCOUNT='sales' FWD='info@user1.example,:blackhole:' FWD_ONLY='yes' SUSPENDED='no'
 EOF
-s67_pass=$(HESTIA="$HESTIA_FIX" HESTIA_HOME_ROOT="$HOME_FIX" EXIM_DOMAINS_DIR="$EXIM_FIX" bash -c "source '$S67_SCRIPT'; check_mail" 2>&1)
+s67_pass=$(HESTIA="$HESTIA_FIX" HESTIA_HOME_ROOT="$HOME_FIX" EXIM_DOMAINS_DIR="$EXIM_FIX" bash -uc "set -uo pipefail; source '$S67_SCRIPT'; check_mail" 2>&1)
 if printf '%s\n' "$s67_pass" | grep -q '^PASS:S67:No external mail forwards or external catch-all redirects found'; then
     pass "v-security-audit S67 passes when only internal forwards and :blackhole: exist (and ignores symlinks)"
 else
