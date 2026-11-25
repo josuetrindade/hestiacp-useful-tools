@@ -91,7 +91,8 @@ function hst_mfp_normalize_domain(string $domain): string {
 
 /**
  * Parse /etc/hestiacp-mail-forward-policy.conf safely without shell evaluation.
- * If the config file does not exist or cannot be read, enforcement defaults to disabled.
+ * If the config file does not exist, enforcement defaults to disabled.
+ * If the file exists but cannot be read (e.g. 0600 permissions), fail closed with scope=user.
  *
  * @return array{
  *   enabled: bool,
@@ -113,13 +114,30 @@ function hst_mfp_load_config(?string $path = null): array {
 	];
 
 	$conf_path = $path ?? hst_mfp_config_path();
-	if (!is_file($conf_path) || !is_readable($conf_path)) {
+	if (!file_exists($conf_path)) {
 		return $defaults;
+	}
+	if (!is_file($conf_path) || !is_readable($conf_path)) {
+		if (!defined("HESTIA_MFP_SILENCE_ERROR_LOG")) {
+			error_log(
+				"hestiacp-mail-forward-policy: config '$conf_path' exists but is not readable; failing closed with scope=user",
+			);
+		}
+		$fail_closed = $defaults;
+		$fail_closed["enabled"] = true;
+		return $fail_closed;
 	}
 
 	$lines = @file($conf_path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
 	if (!is_array($lines)) {
-		return $defaults;
+		if (!defined("HESTIA_MFP_SILENCE_ERROR_LOG")) {
+			error_log(
+				"hestiacp-mail-forward-policy: failed reading config '$conf_path'; failing closed with scope=user",
+			);
+		}
+		$fail_closed = $defaults;
+		$fail_closed["enabled"] = true;
+		return $fail_closed;
 	}
 
 	$raw = [];
@@ -295,7 +313,10 @@ function hst_mfp_get_allowed_domains(string $target_user, array $cfg): array {
 				continue;
 			}
 			$domains = hst_mfp_exec_json("v-list-mail-domains " . escapeshellarg($u) . " json");
-			foreach (array_keys($domains) as $dom) {
+			foreach ($domains as $dom => $meta) {
+				if (is_array($meta) && (($meta["SUSPENDED"] ?? "no") === "yes")) {
+					continue;
+				}
 				if (is_string($dom)) {
 					hst_mfp_add_domain_key($allowed, $dom);
 				}
@@ -307,7 +328,10 @@ function hst_mfp_get_allowed_domains(string $target_user, array $cfg): array {
 	$clean_user = trim($target_user, "'\"");
 	if ($clean_user !== "" && preg_match('/^[a-zA-Z0-9._-]+$/', $clean_user)) {
 		$domains = hst_mfp_exec_json("v-list-mail-domains " . escapeshellarg($clean_user) . " json");
-		foreach (array_keys($domains) as $dom) {
+		foreach ($domains as $dom => $meta) {
+			if (is_array($meta) && (($meta["SUSPENDED"] ?? "no") === "yes")) {
+				continue;
+			}
 			if (is_string($dom)) {
 				hst_mfp_add_domain_key($allowed, $dom);
 			}
@@ -452,13 +476,13 @@ function hst_mfp_validate_api_command(
 	}
 
 	$context_label = "";
-	$target_arg_key = "";
+	$target_start_index = 0;
 	if ($cmd === "v-add-mail-account-forward") {
 		$context_label = "forward";
-		$target_arg_key = "arg4";
+		$target_start_index = 3;
 	} elseif ($cmd === "v-add-mail-domain-catchall" || $cmd === "v-change-mail-domain-catchall") {
 		$context_label = "catchall";
-		$target_arg_key = "arg3";
+		$target_start_index = 2;
 	} else {
 		return null;
 	}
@@ -475,12 +499,23 @@ function hst_mfp_validate_api_command(
 		return null;
 	}
 
-	$target = trim((string) ($args[$target_arg_key] ?? ""));
-	if ($target === "") {
-		return null;
+	// web/api/index.php appends received arg1..arg13 sequentially with foreach($hst_cmd_args),
+	// so skipping arg4 and passing arg5 shifts arg5 into position 3 ($4 in shell).
+	// Validate by positional order across all trailing positional arguments and fail closed if missing.
+	$pos_args = array_values($args);
+	$candidates = array_slice($pos_args, $target_start_index);
+	$non_empty = [];
+	foreach ($candidates as $cand) {
+		$t = trim((string) $cand);
+		if ($t !== "") {
+			$non_empty[] = $t;
+		}
+	}
+	if (empty($non_empty)) {
+		return hst_mfp_format_error(["missing target"], (string) $cfg["scope"], $context_label);
 	}
 
-	$blocked = hst_mfp_find_blocked_targets([$target], $key_user, $cfg);
+	$blocked = hst_mfp_find_blocked_targets($non_empty, $key_user, $cfg);
 	if (empty($blocked)) {
 		return null;
 	}

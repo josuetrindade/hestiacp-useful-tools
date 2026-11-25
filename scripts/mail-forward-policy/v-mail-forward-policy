@@ -60,7 +60,7 @@ backup_target_file() {
         chmod 0700 "$MFP_BAK_DIR" 2>/dev/null || true
     fi
     local ts
-    ts="$(date +%Y%m%d-%H%M%S)"
+    ts="$(date +%Y%m%d-%H%M%S)-$$"
     local dst="$MFP_BAK_DIR/${tag}.bak.${ts}"
     cp -p "$src" "$dst"
     chmod 0600 "$dst" 2>/dev/null || true
@@ -87,10 +87,19 @@ run_patch_engine() {
         "web_api_index.php:$HESTIA/web/api/index.php"
     )
 
+    local tmp_base="${TMPDIR:-/tmp}"
+    if [ "$(id -u)" -eq 0 ] && [ -d /run ] && [ -w /run ]; then
+        tmp_base="/run"
+    fi
+
     local pair tag target tmp_out rc
     for pair in "${files[@]}"; do
         tag="${pair%%:*}"
         target="${pair#*:}"
+        if [ -L "$target" ]; then
+            echo "ERROR: Refusing to patch symlink: $target" >&2
+            return 1
+        fi
         if [ ! -f "$target" ]; then
             if [ "$mode" = "disable" ]; then
                 continue
@@ -99,8 +108,7 @@ run_patch_engine() {
             return 1
         fi
 
-        tmp_out="$(mktemp)"
-        chmod 0644 "$tmp_out" 2>/dev/null || true
+        tmp_out="$(umask 077 && mktemp "$tmp_base/hestia-mfp.XXXXXX")"
 
         rc=0
         "$php_bin" -r '
@@ -141,57 +149,80 @@ if ($tag === "web_add_mail_index.php") {
     }
     $snippet = <<<'\''PHP'\''
 	// [hestia-mail-forward-policy-v1-add-start]
-	if (empty($_SESSION["error_msg"]) && empty($_POST["v_blackhole"]) && !empty($_POST["v_fwd"]) && is_file(dirname(__DIR__, 2) . "/inc/mail_forward_policy.php")) {
-		require_once dirname(__DIR__, 2) . "/inc/mail_forward_policy.php";
-		$mfp_targets = hst_mfp_parse_targets((string) $_POST["v_fwd"]);
-		$mfp_error = hst_mfp_validate_web_forwards($mfp_targets, trim((string) $user, "'\''\""), "forward");
-		if ($mfp_error !== null) {
-			$_SESSION["error_msg"] = $mfp_error;
+	if (empty($_SESSION["error_msg"]) && empty($_POST["v_blackhole"]) && isset($_POST["v_fwd"])) {
+		if (!is_string($_POST["v_fwd"])) {
+			$_SESSION["error_msg"] = _("Invalid mail forwarding input.");
+		} elseif ($_POST["v_fwd"] !== "" && is_file(dirname(__DIR__, 2) . "/inc/mail_forward_policy.php")) {
+			require_once dirname(__DIR__, 2) . "/inc/mail_forward_policy.php";
+			$mfp_targets = hst_mfp_parse_targets($_POST["v_fwd"]);
+			$mfp_error = hst_mfp_validate_web_forwards($mfp_targets, trim((string) $user, "'\''\""), "forward");
+			if ($mfp_error !== null) {
+				$_SESSION["error_msg"] = $mfp_error;
+			}
+			unset($mfp_targets, $mfp_error);
 		}
-		unset($mfp_targets, $mfp_error);
 	}
 	// [hestia-mail-forward-policy-v1-add-end]
 
 PHP;
     $updated = str_replace($anchor, $snippet . $anchor, $clean);
 } elseif ($tag === "web_edit_mail_index.php") {
-    $anchor1 = "\t// Change catchall address\n";
-    $anchor2 = "\t// Change forwarders\n\tif (empty(\$_SESSION[\"error_msg\"]) && empty(\$_POST[\"v_blackhole\"])) {\n";
+    $anchor1 = "\t// Delete antispam\n";
+    $anchor2 = "\t// Change password\n";
     if (substr_count($clean, $anchor1) !== 1) {
-        fwrite(STDERR, "ERROR: Unique anchor \"// Change catchall address\" not found in $src\n");
+        fwrite(STDERR, "ERROR: Unique anchor \"// Delete antispam\" not found in $src\n");
         exit(2);
     }
     if (substr_count($clean, $anchor2) !== 1) {
-        fwrite(STDERR, "ERROR: Unique anchor \"// Change forwarders\" not found in $src\n");
+        fwrite(STDERR, "ERROR: Unique anchor \"// Change password\" not found in $src\n");
         exit(2);
     }
     $snippet1 = <<<'\''PHP'\''
 	// [hestia-mail-forward-policy-v1-catchall-start]
-	if (empty($_SESSION["error_msg"]) && !empty($_POST["v_catchall"]) && strcasecmp(trim((string) $_POST["v_catchall"]), trim((string) $v_catchall)) !== 0 && is_file(dirname(__DIR__, 2) . "/inc/mail_forward_policy.php")) {
-		require_once dirname(__DIR__, 2) . "/inc/mail_forward_policy.php";
-		$mfp_error = hst_mfp_validate_web_forwards([trim((string) $_POST["v_catchall"])], trim((string) $user, "'\''\""), "catchall");
-		if ($mfp_error !== null) {
-			$_SESSION["error_msg"] = $mfp_error;
+	if (empty($_SESSION["error_msg"]) && isset($_POST["v_catchall"])) {
+		if (!is_string($_POST["v_catchall"])) {
+			$_SESSION["error_msg"] = _("Invalid catch-all email input.");
+		} else {
+			$mfp_curr_ca = trim((string) ($data[$v_domain]["CATCHALL"] ?? ($v_catchall ?? "")));
+			$mfp_post_ca = trim($_POST["v_catchall"]);
+			if ($mfp_post_ca !== "" && $mfp_post_ca !== $mfp_curr_ca && is_file(dirname(__DIR__, 2) . "/inc/mail_forward_policy.php")) {
+				require_once dirname(__DIR__, 2) . "/inc/mail_forward_policy.php";
+				$mfp_error = hst_mfp_validate_web_forwards([$mfp_post_ca], trim((string) $user, "'\''\""), "catchall");
+				if ($mfp_error !== null) {
+					$_SESSION["error_msg"] = $mfp_error;
+				}
+				unset($mfp_error);
+			}
+			unset($mfp_curr_ca, $mfp_post_ca);
 		}
-		unset($mfp_error);
 	}
 	// [hestia-mail-forward-policy-v1-catchall-end]
 
 PHP;
     $snippet2 = <<<'\''PHP'\''
 	// [hestia-mail-forward-policy-v1-edit-start]
-	if (empty($_SESSION["error_msg"]) && empty($_POST["v_blackhole"]) && is_file(dirname(__DIR__, 2) . "/inc/mail_forward_policy.php")) {
-		require_once dirname(__DIR__, 2) . "/inc/mail_forward_policy.php";
-		$mfp_posted = hst_mfp_parse_targets((string) ($_POST["v_fwd"] ?? ""));
-		$mfp_existing = array_values(array_filter(array_map("trim", is_array($vfwd ?? null) ? $vfwd : [])));
-		$mfp_added = array_values(array_udiff($mfp_posted, $mfp_existing, "strcasecmp"));
-		if (!empty($mfp_added)) {
-			$mfp_error = hst_mfp_validate_web_forwards($mfp_added, trim((string) $user, "'\''\""), "forward");
-			if ($mfp_error !== null) {
-				$_SESSION["error_msg"] = $mfp_error;
+	if (empty($_SESSION["error_msg"]) && empty($_POST["v_blackhole"]) && isset($_POST["v_fwd"])) {
+		if (!is_string($_POST["v_fwd"])) {
+			$_SESSION["error_msg"] = _("Invalid mail forwarding input.");
+		} elseif (is_file(dirname(__DIR__, 2) . "/inc/mail_forward_policy.php")) {
+			require_once dirname(__DIR__, 2) . "/inc/mail_forward_policy.php";
+			$mfp_acc_key = is_string($v_account ?? null) ? $v_account : "";
+			$mfp_acc_data = $data[$mfp_acc_key] ?? ($data[strtolower($mfp_acc_key)] ?? []);
+			$mfp_curr_raw = trim((string) ($mfp_acc_data["FWD"] ?? ""));
+			if (strtolower($mfp_curr_raw) === ":blackhole:") {
+				$mfp_curr_raw = "";
 			}
+			$mfp_posted = hst_mfp_parse_targets($_POST["v_fwd"]);
+			$mfp_existing = hst_mfp_parse_targets($mfp_curr_raw);
+			$mfp_added = array_values(array_diff($mfp_posted, $mfp_existing));
+			if (!empty($mfp_added)) {
+				$mfp_error = hst_mfp_validate_web_forwards($mfp_added, trim((string) $user, "'\''\""), "forward");
+				if ($mfp_error !== null) {
+					$_SESSION["error_msg"] = $mfp_error;
+				}
+			}
+			unset($mfp_acc_key, $mfp_acc_data, $mfp_curr_raw, $mfp_posted, $mfp_existing, $mfp_added, $mfp_error);
 		}
-		unset($mfp_posted, $mfp_existing, $mfp_added, $mfp_error);
 	}
 	// [hestia-mail-forward-policy-v1-edit-end]
 
@@ -306,8 +337,20 @@ echo json_encode($c);
 ' "$MFP_CONF" "$helper" 2>/dev/null || echo "{}")"
     fi
 
+    local conf_readable=1
+    local conf_mode=""
+    if [ -f "$MFP_CONF" ]; then
+        conf_mode=$(stat -c '%a' "$MFP_CONF" 2>/dev/null || echo "644")
+        if [[ ! "$conf_mode" =~ [4567]$ ]]; then
+            conf_readable=0
+        fi
+    fi
+
     echo "=== HestiaCP Mail Forward Policy Status ==="
-    echo "Config file:  $MFP_CONF ($([ -f "$MFP_CONF" ] && echo "present" || echo "missing"))"
+    echo "Config file:  $MFP_CONF ($([ -f "$MFP_CONF" ] && echo "present mode=${conf_mode}" || echo "missing"))"
+    if [ "$conf_readable" -eq 0 ]; then
+        echo "WARN:         $MFP_CONF is not world-readable (hestiaweb fails closed to scope=user). Run: chmod 0644 $MFP_CONF"
+    fi
     if [ "$cfg_json" != "{}" ]; then
         "$php_bin" -r '
 $c = json_decode($argv[1], true);
@@ -328,7 +371,7 @@ if (is_array($c)) {
     echo "Hook edit:    $([ "$edit_fwd_ok" -eq 1 ] && echo "active" || echo "missing") ($HESTIA/web/edit/mail/index.php)"
     echo "Hook API:     $([ "$api_ok" -eq 1 ] && echo "active" || echo "missing") ($HESTIA/web/api/index.php)"
 
-    if [ "$helper_state" = "present" ] && [ "$add_ok" -eq 1 ] && [ "$edit_ca_ok" -eq 1 ] && [ "$edit_fwd_ok" -eq 1 ] && [ "$api_ok" -eq 1 ]; then
+    if [ "$conf_readable" -eq 1 ] && [ "$helper_state" = "present" ] && [ "$add_ok" -eq 1 ] && [ "$edit_ca_ok" -eq 1 ] && [ "$edit_fwd_ok" -eq 1 ] && [ "$api_ok" -eq 1 ]; then
         return 0
     fi
     return 1
@@ -391,6 +434,28 @@ function parse_kv_line(string $line): array {
     return $res;
 }
 
+function safe_read_tenant_file(string $path, string $user_home, int $max_bytes = 65536): ?string {
+    if (is_link($path) || @filetype($path) !== "file") {
+        return null;
+    }
+    $real_home = realpath($user_home);
+    $real_file = realpath($path);
+    if ($real_home === false || $real_file === false) {
+        return null;
+    }
+    $real_home_slash = rtrim($real_home, "/") . "/";
+    if (!str_starts_with($real_file, $real_home_slash)) {
+        return null;
+    }
+    $fh = @fopen($real_file, "rb");
+    if ($fh === false) {
+        return null;
+    }
+    $data = fread($fh, $max_bytes);
+    fclose($fh);
+    return is_string($data) ? $data : null;
+}
+
 $users_dir = $hestia . "/data/users";
 $user_domains = [];
 $server_domains = $allowlist;
@@ -412,9 +477,10 @@ if (is_dir($users_dir)) {
             $users[] = $u;
             $user_domains[$u] = $allowlist;
             $mail_conf = $users_dir . "/" . $u . "/mail.conf";
-            if (is_file($mail_conf)) {
+            if (is_file($mail_conf) && !is_link($mail_conf)) {
                 foreach (file($mail_conf, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [] as $line) {
                     $kv = parse_kv_line($line);
+                    if (($kv["SUSPENDED"] ?? "no") === "yes") continue;
                     if (!empty($kv["DOMAIN"])) {
                         hst_mfp_add_domain_key($user_domains[$u], $kv["DOMAIN"]);
                         hst_mfp_add_domain_key($server_domains, $kv["DOMAIN"]);
@@ -481,10 +547,12 @@ foreach ($users as $u) {
         }
     }
 
-    // 3. Legacy ~/.forward
-    $dot_fwd = $home_root . "/" . $u . "/.forward";
-    if (is_file($dot_fwd)) {
-        foreach (file($dot_fwd, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [] as $line) {
+    // 3. Legacy ~/.forward (strictly regular non-symlink file bounded to 64 KB inside user home)
+    $u_home = $home_root . "/" . $u;
+    $dot_fwd = $u_home . "/.forward";
+    $dot_raw = safe_read_tenant_file($dot_fwd, $u_home);
+    if ($dot_raw !== null) {
+        foreach (preg_split("/\r?\n/", $dot_raw) ?: [] as $line) {
             $trim = trim($line);
             if ($trim === "" || str_starts_with($trim, "#")) continue;
             if (strpos($trim, "@") !== false) {
@@ -503,12 +571,12 @@ foreach ($users as $u) {
 
     // 4. Dovecot Sieve redirect rules (.dovecot.sieve and sieve/*.sieve)
     $sieve_files = array_merge(
-        glob($home_root . "/" . $u . "/mail/*/*/.dovecot.sieve") ?: [],
-        glob($home_root . "/" . $u . "/mail/*/*/sieve/*.sieve") ?: []
+        glob($u_home . "/mail/*/*/.dovecot.sieve") ?: [],
+        glob($u_home . "/mail/*/*/sieve/*.sieve") ?: []
     );
     foreach ($sieve_files as $sf) {
-        if (!is_file($sf)) continue;
-        $raw_sieve = file_get_contents($sf) ?: "";
+        $raw_sieve = safe_read_tenant_file($sf, $u_home);
+        if ($raw_sieve === null) continue;
         if (preg_match_all("/\bredirect\b(?:\s+:[a-zA-Z0-9_]+(?:\s+\"[^\"]*\")?)*\s+\"([^\"]+)\"/i", $raw_sieve, $sm)) {
             foreach ($sm[1] as $target) {
                 $tdom = hst_mfp_extract_domain($target);
@@ -584,6 +652,11 @@ $hestia = rtrim($argv[2], "/");
 $target_user = $argv[5];
 $target_addr = $argv[6];
 
+if (!preg_match("/^[a-zA-Z0-9._-]+$/", $target_user) || $target_user === "." || $target_user === "..") {
+    fwrite(STDERR, "ERROR: Invalid username format: $target_user\n");
+    exit(1);
+}
+
 function parse_kv_line_chk(string $line): array {
     $res = [];
     if (preg_match_all("/([A-Z0-9_]+)=\x27([^\x27]*)\x27/", $line, $matches, PREG_SET_ORDER)) {
@@ -617,6 +690,7 @@ if (($cfg["scope"] ?? "user") === "server") {
     if (is_file($mail_conf)) {
         foreach (file($mail_conf, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [] as $line) {
             $kv = parse_kv_line_chk($line);
+            if (($kv["SUSPENDED"] ?? "no") === "yes") continue;
             if (!empty($kv["DOMAIN"])) {
                 hst_mfp_add_domain_key($allowed, $kv["DOMAIN"]);
             }

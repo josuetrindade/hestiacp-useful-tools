@@ -88,12 +88,20 @@ cat > "$HESTIA_FIX/web/edit/mail/index.php" << 'EOF'
 <?php
 $user = "'user1'";
 if (!empty($_POST["save"]) && empty($_GET["account"])) {
+	// Delete antispam
+	if (empty($_SESSION["error_msg"])) {
+		$antispam_changed = true;
+	}
 	// Change catchall address
 	if (!empty($v_catchall) && !empty($_POST["v_catchall"]) && empty($_SESSION["error_msg"])) {
 		echo "CA_CHANGED\n";
 	}
 }
 if (!empty($_POST["save"]) && !empty($_GET["account"])) {
+	// Change password
+	if (!empty($_POST["v_password"]) && empty($_SESSION["error_msg"])) {
+		echo "PASS_CHANGED\n";
+	}
 	// Change forwarders to :blackhole:
 	if (empty($_SESSION["error_msg"]) && !empty($_POST["v_blackhole"])) {
 		echo "BH\n";
@@ -183,8 +191,8 @@ cat > "$MOCK_BIN/v-list-mail-domains" << 'EOF'
 #!/bin/bash
 u="$1"
 case "$u" in
-    user1) echo '{"user1.example": {}}' ;;
-    user2) echo '{"user2.example": {}}' ;;
+    user1) echo '{"user1.example": {"SUSPENDED": "no"}, "susp.example": {"SUSPENDED": "yes"}}' ;;
+    user2) echo '{"user2.example": {"SUSPENDED": "no"}}' ;;
     *)     echo '{}' ;;
 esac
 EOF
@@ -266,20 +274,120 @@ $posted_add = hst_mfp_parse_targets("vip@gmail.com, another@gmail.com");
 $added_new = array_values(array_udiff($posted_add, $existing, "strcasecmp"));
 assert_case("adding extra external fwd blocked", hst_mfp_validate_web_forwards($added_new, "user1", "forward"), false);
 
-// G) API command checks
+// G) API command checks (including Red-Team #1 positional gap-shift bypass & fail-closed)
 assert_case("API external fwd blocked for user1", hst_mfp_validate_api_command("v-add-mail-account-forward", ["arg1" => "user1", "arg4" => "lazy@gmail.com"], "user1", "admin"), false);
 assert_case("API external catchall blocked for user1", hst_mfp_validate_api_command("v-add-mail-domain-catchall", ["arg1" => "user1", "arg3" => "lazy@gmail.com"], "user1", "admin"), false);
-assert_case("API own fwd allowed for user1", hst_mfp_validate_api_command("v-add-mail-account-forward", ["arg1" => "user1", "arg4" => "info@user1.example"], "user1", "admin"), true);
-assert_case("API blackhole allowed for user1", hst_mfp_validate_api_command("v-add-mail-account-forward", ["arg1" => "user1", "arg4" => ":blackhole:"], "user1", "admin"), true);
+assert_case("API positional gap-shift fwd (no arg4, arg5=gmail) blocked", hst_mfp_validate_api_command("v-add-mail-account-forward", ["arg1" => "user1", "arg2" => "user1.example", "arg3" => "sales", "arg5" => "evil@gmail.com"], "user1", "admin"), false);
+assert_case("API positional gap-shift catchall (no arg3, arg4=gmail) blocked", hst_mfp_validate_api_command("v-add-mail-domain-catchall", ["arg1" => "user1", "arg2" => "user1.example", "arg4" => "evil@gmail.com"], "user1", "admin"), false);
+assert_case("API empty target fails closed", hst_mfp_validate_api_command("v-add-mail-account-forward", ["arg1" => "user1", "arg2" => "user1.example", "arg3" => "sales"], "user1", "admin"), false);
+assert_case("API trailing external extra arg blocked", hst_mfp_validate_api_command("v-add-mail-account-forward", ["arg1" => "user1", "arg2" => "user1.example", "arg3" => "sales", "arg4" => "info@user1.example", "arg5" => "evil@gmail.com"], "user1", "admin"), false);
+assert_case("API own fwd allowed for user1", hst_mfp_validate_api_command("v-add-mail-account-forward", ["arg1" => "user1", "arg2" => "user1.example", "arg3" => "sales", "arg4" => "info@user1.example"], "user1", "admin"), true);
+assert_case("API blackhole allowed for user1", hst_mfp_validate_api_command("v-add-mail-account-forward", ["arg1" => "user1", "arg2" => "user1.example", "arg3" => "sales", "arg4" => ":blackhole:"], "user1", "admin"), true);
 assert_case("API external allowed for secadmin", hst_mfp_validate_api_command("v-add-mail-account-forward", ["arg1" => "user1", "arg4" => "lazy@gmail.com"], "secadmin", "admin"), true);
 assert_case("API external allowed for root_user", hst_mfp_validate_api_command("v-add-mail-account-forward", ["arg1" => "user1", "arg4" => "lazy@gmail.com"], "admin", "admin"), true);
+
+// H) Suspended mail domain cannot be used as internal forward destination (#8)
+assert_case("suspended mail domain blocked", hst_mfp_validate_web_forwards(["sales@susp.example"], "user1", "forward"), false);
 
 echo "ALL_PHP_CASES_OK\n";
 ' "$MOCK_BIN" "$EXIM_FIX" "$HELPER_SRC" "$TEST_ROOT" 2>&1)
 if printf '%s\n' "$php_test_out" | grep -q 'ALL_PHP_CASES_OK'; then
-    pass "All PHP web/API policy cases passed (impersonation, SCOPE=user vs server, allowlist, catchall, existing exception, API)"
+    pass "All PHP web/API policy cases passed (incl. positional gap-shift & suspended domain fixes)"
 else
     fail "PHP functional policy test failed: $php_test_out"
+fi
+
+# 4b. Red-Team Regression #3/#7/#9: Patched edit/mail/index.php runtime execution (cross-account clone, case bypass, array input, atomic abort)
+edit_rt_out=$(php -d error_reporting=E_ALL -r '
+define("HESTIA_DIR_BIN", $argv[1] . "/");
+define("HESTIA_MFP_TEST_MODE", true);
+define("HESTIA_MFP_SKIP_LOG", true);
+define("HESTIA_MFP_CMD_PREFIX", $argv[1] . "/");
+define("HESTIA_MFP_CONF", $argv[2] . "/conf_user.conf");
+if (!function_exists("_")) { function _(string $s): string { return $s; } }
+
+// Case A: Cross-account exception cloning (GET=direcao, POST v_account=comercial, v_fwd=vip@gmail.com)
+$_SESSION = ["userContext" => "user", "error_msg" => ""];
+$_GET = ["domain" => "user1.example", "account" => "direcao"];
+$_POST = ["save" => "save", "v_account" => "comercial", "v_password" => "Secret123", "v_fwd" => "vip@gmail.com"];
+$v_domain = "user1.example";
+$v_account = "comercial";
+$vfwd = ["vip@gmail.com"]; // stale GET account value!
+$data = ["direcao" => ["FWD" => "vip@gmail.com"], "comercial" => ["FWD" => ""]];
+ob_start(); include $argv[3]; $out_a = ob_get_clean();
+$pass_a = ($out_a === "" && !empty($_SESSION["error_msg"]));
+
+// Case B: Case-variant forward on same account (existing=vip@gmail.com, posted=VIP@GMAIL.COM)
+$_SESSION = ["userContext" => "user", "error_msg" => ""];
+$_GET = ["domain" => "user1.example", "account" => "direcao"];
+$_POST = ["save" => "save", "v_account" => "direcao", "v_password" => "Secret123", "v_fwd" => "VIP@GMAIL.COM"];
+$v_account = "direcao";
+$vfwd = ["vip@gmail.com"];
+$data = ["direcao" => ["FWD" => "vip@gmail.com"]];
+ob_start(); include $argv[3]; $out_b = ob_get_clean();
+$pass_b = ($out_b === "" && !empty($_SESSION["error_msg"]));
+
+// Case C: Legitimate password change keeping admin-set vip@gmail.com exact -> PASS & updates password
+$_SESSION = ["userContext" => "user", "error_msg" => ""];
+$_GET = ["domain" => "user1.example", "account" => "direcao"];
+$_POST = ["save" => "save", "v_account" => "direcao", "v_password" => "Secret123", "v_fwd" => "vip@gmail.com"];
+$v_account = "direcao";
+$vfwd = ["vip@gmail.com"];
+$data = ["direcao" => ["FWD" => "vip@gmail.com"]];
+ob_start(); include $argv[3]; $out_c = ob_get_clean();
+$pass_c = (str_contains($out_c, "PASS_CHANGED") && empty($_SESSION["error_msg"]));
+
+// Case D: Array POST payload v_fwd[] fails closed cleanly with zero warnings
+$_SESSION = ["userContext" => "user", "error_msg" => ""];
+$_POST = ["save" => "save", "v_account" => "comercial", "v_fwd" => ["evil@gmail.com"]];
+$v_account = "comercial";
+$data = ["comercial" => ["FWD" => ""]];
+ob_start(); include $argv[3]; $out_d = ob_get_clean();
+$pass_d = ($out_d === "" && !empty($_SESSION["error_msg"]));
+
+echo ($pass_a && $pass_b && $pass_c && $pass_d) ? "EDIT_REDTEAM_OK\n" : "FAIL a=$pass_a b=$pass_b c=$pass_c d=$pass_d out_a=$out_a out_b=$out_b out_c=$out_c\n";
+' "$MOCK_BIN" "$TEST_ROOT" "$HESTIA_FIX/web/edit/mail/index.php" 2>&1)
+if [ "$edit_rt_out" = "EDIT_REDTEAM_OK" ]; then
+    pass "Patched edit/mail/index.php blocks cross-account cloning, case variants, array payloads, and prevents partial saves"
+else
+    fail "edit/mail/index.php red-team harness failed: $edit_rt_out"
+fi
+
+# 4c. Red-Team #5: Unreadable existing config (0600 root:root) must fail closed for hestiaweb / non-root
+cat > "$TEST_ROOT/locked.conf" << 'EOF'
+ENABLED="yes"
+SCOPE="server"
+EOF
+chmod 0600 "$TEST_ROOT/locked.conf"
+if [ "$(id -u)" -eq 0 ] && id www-data >/dev/null 2>&1; then
+    chmod 0755 "$TEST_ROOT"
+    fc_out=$(su -s /bin/sh www-data -c "php -r '
+define(\"HESTIA_MFP_TEST_MODE\", true);
+define(\"HESTIA_MFP_SILENCE_ERROR_LOG\", true);
+define(\"HESTIA_MFP_CONF\", \$argv[1]);
+require_once \$argv[2];
+\$c = hst_mfp_load_config();
+echo (\$c[\"enabled\"] === true && \$c[\"scope\"] === \"user\") ? \"FAIL_CLOSED_OK\n\" : \"FAIL_OPEN\n\";
+' '$TEST_ROOT/locked.conf' '$HELPER_SRC'")
+    if [ "$fc_out" = "FAIL_CLOSED_OK" ]; then
+        pass "Unreadable existing config file (0600) fails closed as www-data (enabled=true, scope=user)"
+    else
+        fail "Unreadable existing config did not fail closed: $fc_out"
+    fi
+else
+    fc_out=$(php -r '
+define("HESTIA_MFP_TEST_MODE", true);
+define("HESTIA_MFP_SILENCE_ERROR_LOG", true);
+define("HESTIA_MFP_CONF", $argv[1]);
+require_once $argv[2];
+$c = hst_mfp_load_config();
+echo ($c["enabled"] === true && $c["scope"] === "user") ? "FAIL_CLOSED_OK\n" : "FAIL_OPEN\n";
+' "$TEST_ROOT/locked.conf" "$HELPER_SRC")
+    if [ "$fc_out" = "FAIL_CLOSED_OK" ]; then
+        pass "Unreadable existing config fails closed (enabled=true, scope=user)"
+    else
+        fail "Unreadable existing config did not fail closed: $fc_out"
+    fi
 fi
 
 # 5. CLI --check and --audit + Security Audit S67
@@ -309,6 +417,9 @@ echo "dotfwd@gmail.com" > "$HOME_FIX/user2/.forward"
 cat > "$HOME_FIX/user1/mail/user1.example/sales/sieve/custom.sieve" << 'EOF'
 redirect :copy "sieve-ext@yahoo.com";
 EOF
+# Symlink / device DoS traps (#4): must be safely ignored by --audit (never open /dev/zero or leak /etc/passwd)
+ln -s /dev/zero "$HOME_FIX/user1/mail/user1.example/sales/sieve/dos.sieve"
+ln -s /etc/passwd "$HOME_FIX/user1/.forward"
 
 check_block_rc=0
 HESTIA="$HESTIA_FIX" MFP_CONF="$CONF_FIX" HESTIA_HOME_ROOT="$HOME_FIX" EXIM_DOMAINS_DIR="$EXIM_FIX" bash "$CLI_SRC" --check user1 lazy@gmail.com >/dev/null 2>&1 || check_block_rc=$?
@@ -316,10 +427,12 @@ check_allow_rc=0
 HESTIA="$HESTIA_FIX" MFP_CONF="$CONF_FIX" HESTIA_HOME_ROOT="$HOME_FIX" EXIM_DOMAINS_DIR="$EXIM_FIX" bash "$CLI_SRC" --check user1 info@user1.example >/dev/null 2>&1 || check_allow_rc=$?
 check_admin_rc=0
 HESTIA="$HESTIA_FIX" MFP_CONF="$CONF_FIX" HESTIA_HOME_ROOT="$HOME_FIX" EXIM_DOMAINS_DIR="$EXIM_FIX" bash "$CLI_SRC" --check admin lazy@gmail.com >/dev/null 2>&1 || check_admin_rc=$?
-if [ "$check_block_rc" -eq 1 ] && [ "$check_allow_rc" -eq 0 ] && [ "$check_admin_rc" -eq 0 ]; then
-    pass "CLI --check returns blocked=1 for external user forward, 0 for own domain and admin"
+check_trav_rc=0
+HESTIA="$HESTIA_FIX" MFP_CONF="$CONF_FIX" HESTIA_HOME_ROOT="$HOME_FIX" EXIM_DOMAINS_DIR="$EXIM_FIX" bash "$CLI_SRC" --check ../../etc/passwd lazy@gmail.com >/dev/null 2>&1 || check_trav_rc=$?
+if [ "$check_block_rc" -eq 1 ] && [ "$check_allow_rc" -eq 0 ] && [ "$check_admin_rc" -eq 0 ] && [ "$check_trav_rc" -eq 1 ]; then
+    pass "CLI --check handles blocked=1, own/admin=0, and rejects path-traversal usernames (#4)"
 else
-    fail "CLI --check unexpected return codes (block=$check_block_rc allow=$check_allow_rc admin=$check_admin_rc)"
+    fail "CLI --check unexpected return codes (block=$check_block_rc allow=$check_allow_rc admin=$check_admin_rc trav=$check_trav_rc)"
 fi
 
 audit_rc=0
@@ -330,7 +443,7 @@ if [ "$audit_rc" -eq 2 ] && \
    printf '%s' "$audit_json" | grep -q 'ext-ca@outlook.com' && \
    printf '%s' "$audit_json" | grep -q 'dotfwd@gmail.com' && \
    printf '%s' "$audit_json" | grep -q 'sieve-ext@yahoo.com'; then
-    pass "CLI --audit detects external account forwards, catch-alls, .forward, and Sieve redirects (ignoring :blackhole: and internal)"
+    pass "CLI --audit detects external targets while safely skipping /dev/zero and /etc/passwd symlinks (#4)"
 else
     fail "CLI --audit failed (rc=$audit_rc): $audit_json"
 fi
