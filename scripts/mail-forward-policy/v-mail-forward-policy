@@ -1,0 +1,674 @@
+#!/bin/bash
+# info: Manage and audit HestiaCP non-admin external mail forwarding restriction policy
+# options: [--apply|--disable|--status|--audit [--quiet] [--json]|--check USER TARGET|--help]
+#
+# Prevents non-admin HestiaCP users (and non-admin API keys) from adding external
+# mail forwards or external Catch-All redirects, while permitting admin sessions
+# (including admin impersonation) to add exceptions.
+
+set -euo pipefail
+
+export HESTIA="${HESTIA:-/usr/local/hestia}"
+MFP_CONF="${MFP_CONF:-/etc/hestiacp-mail-forward-policy.conf}"
+HESTIA_HOME_ROOT="${HESTIA_HOME_ROOT:-/home}"
+EXIM_DOMAINS_DIR="${EXIM_DOMAINS_DIR:-/etc/exim4/domains}"
+MFP_BAK_DIR="${MFP_BAK_DIR:-/var/backups/hestiacp-useful-tools}"
+MFP_PHP_BIN="${MFP_PHP_BIN:-}"
+
+print_help() {
+    cat << 'EOF'
+Usage: v-mail-forward-policy [COMMAND]
+
+Commands:
+  --apply, --install          Apply idempotent policy hooks to HestiaCP web/API files and validate syntax
+  --disable, --uninstall      Remove policy hooks from HestiaCP core web/API files and UI/helper files
+  --status                    Show current configuration and hook status (exit 0 when healthy)
+  --audit [--quiet] [--json]  Scan account forwards, Catch-Alls, .forward files, and Sieve redirects
+                              (exit 0 if none external found, exit 2 if external targets exist)
+  --check USER TARGET         Check whether TARGET email is allowed for non-admin USER under active policy
+                              (exit 0 if allowed, exit 1 if blocked)
+  --help, -h                  Show this help message
+
+Configuration file: /etc/hestiacp-mail-forward-policy.conf
+EOF
+}
+
+resolve_php_bin() {
+    if [ -n "$MFP_PHP_BIN" ] && [ -x "$MFP_PHP_BIN" ]; then
+        printf '%s\n' "$MFP_PHP_BIN"
+        return 0
+    fi
+    if [ -x "$HESTIA/php/bin/php" ]; then
+        printf '%s\n' "$HESTIA/php/bin/php"
+        return 0
+    fi
+    if command -v php >/dev/null 2>&1; then
+        command -v php
+        return 0
+    fi
+    return 1
+}
+
+backup_target_file() {
+    local src="$1"
+    local tag="$2"
+    [ -f "$src" ] || return 0
+    if [ "$(id -u)" -eq 0 ]; then
+        install -d -m 0700 -o root -g root "$MFP_BAK_DIR"
+    else
+        mkdir -p "$MFP_BAK_DIR"
+        chmod 0700 "$MFP_BAK_DIR" 2>/dev/null || true
+    fi
+    local ts
+    ts="$(date +%Y%m%d-%H%M%S)"
+    local dst="$MFP_BAK_DIR/${tag}.bak.${ts}"
+    cp -p "$src" "$dst"
+    chmod 0600 "$dst" 2>/dev/null || true
+    ls -1t "$MFP_BAK_DIR"/"${tag}.bak."* 2>/dev/null | tail -n +4 | xargs -r rm -f -- 2>/dev/null || true
+}
+
+run_patch_engine() {
+    local mode="$1"
+    local php_bin
+    php_bin="$(resolve_php_bin)" || {
+        echo "ERROR: PHP CLI binary not found (checked HESTIA/php/bin/php and PATH)." >&2
+        return 1
+    }
+
+    local helper_file="$HESTIA/web/inc/mail_forward_policy.php"
+    if [ "$mode" = "apply" ] && [ ! -f "$helper_file" ]; then
+        echo "ERROR: Helper file not found: $helper_file (run install.sh first)." >&2
+        return 1
+    fi
+
+    local files=(
+        "web_add_mail_index.php:$HESTIA/web/add/mail/index.php"
+        "web_edit_mail_index.php:$HESTIA/web/edit/mail/index.php"
+        "web_api_index.php:$HESTIA/web/api/index.php"
+    )
+
+    local pair tag target tmp_out rc
+    for pair in "${files[@]}"; do
+        tag="${pair%%:*}"
+        target="${pair#*:}"
+        if [ ! -f "$target" ]; then
+            if [ "$mode" = "disable" ]; then
+                continue
+            fi
+            echo "ERROR: Expected HestiaCP file missing: $target" >&2
+            return 1
+        fi
+
+        tmp_out="$(mktemp)"
+        chmod 0644 "$tmp_out" 2>/dev/null || true
+
+        rc=0
+        "$php_bin" -r '
+$mode = $argv[1];
+$tag = $argv[2];
+$src = $argv[3];
+$dst = $argv[4];
+$content = file_get_contents($src);
+if ($content === false) {
+    fwrite(STDERR, "ERROR: Failed to read $src\n");
+    exit(1);
+}
+
+$eol = (strpos($content, "\r\n") !== false) ? "\r\n" : "\n";
+$norm = str_replace("\r\n", "\n", $content);
+
+function strip_markers(string $text): string {
+    return (string) preg_replace(
+        "/[ \t]*\/\/ \[hestia-mail-forward-policy-v1-(?:add|catchall|edit|api)-start\].*?\/\/ \[hestia-mail-forward-policy-v1-(?:add|catchall|edit|api)-end\]\n?/s",
+        "",
+        $text
+    );
+}
+
+$clean = strip_markers($norm);
+
+if ($mode === "disable") {
+    $out = ($eol === "\r\n") ? str_replace("\n", "\r\n", $clean) : $clean;
+    file_put_contents($dst, $out);
+    exit(0);
+}
+
+if ($tag === "web_add_mail_index.php") {
+    $anchor = "\t// Add Mail Account\n";
+    if (substr_count($clean, $anchor) !== 1) {
+        fwrite(STDERR, "ERROR: Unique anchor \"// Add Mail Account\" not found in $src\n");
+        exit(2);
+    }
+    $snippet = <<<'\''PHP'\''
+	// [hestia-mail-forward-policy-v1-add-start]
+	if (empty($_SESSION["error_msg"]) && empty($_POST["v_blackhole"]) && !empty($_POST["v_fwd"]) && is_file(dirname(__DIR__, 2) . "/inc/mail_forward_policy.php")) {
+		require_once dirname(__DIR__, 2) . "/inc/mail_forward_policy.php";
+		$mfp_targets = hst_mfp_parse_targets((string) $_POST["v_fwd"]);
+		$mfp_error = hst_mfp_validate_web_forwards($mfp_targets, trim((string) $user, "'\''\""), "forward");
+		if ($mfp_error !== null) {
+			$_SESSION["error_msg"] = $mfp_error;
+		}
+		unset($mfp_targets, $mfp_error);
+	}
+	// [hestia-mail-forward-policy-v1-add-end]
+
+PHP;
+    $updated = str_replace($anchor, $snippet . $anchor, $clean);
+} elseif ($tag === "web_edit_mail_index.php") {
+    $anchor1 = "\t// Change catchall address\n";
+    $anchor2 = "\t// Change forwarders\n\tif (empty(\$_SESSION[\"error_msg\"]) && empty(\$_POST[\"v_blackhole\"])) {\n";
+    if (substr_count($clean, $anchor1) !== 1) {
+        fwrite(STDERR, "ERROR: Unique anchor \"// Change catchall address\" not found in $src\n");
+        exit(2);
+    }
+    if (substr_count($clean, $anchor2) !== 1) {
+        fwrite(STDERR, "ERROR: Unique anchor \"// Change forwarders\" not found in $src\n");
+        exit(2);
+    }
+    $snippet1 = <<<'\''PHP'\''
+	// [hestia-mail-forward-policy-v1-catchall-start]
+	if (empty($_SESSION["error_msg"]) && !empty($_POST["v_catchall"]) && strcasecmp(trim((string) $_POST["v_catchall"]), trim((string) $v_catchall)) !== 0 && is_file(dirname(__DIR__, 2) . "/inc/mail_forward_policy.php")) {
+		require_once dirname(__DIR__, 2) . "/inc/mail_forward_policy.php";
+		$mfp_error = hst_mfp_validate_web_forwards([trim((string) $_POST["v_catchall"])], trim((string) $user, "'\''\""), "catchall");
+		if ($mfp_error !== null) {
+			$_SESSION["error_msg"] = $mfp_error;
+		}
+		unset($mfp_error);
+	}
+	// [hestia-mail-forward-policy-v1-catchall-end]
+
+PHP;
+    $snippet2 = <<<'\''PHP'\''
+	// [hestia-mail-forward-policy-v1-edit-start]
+	if (empty($_SESSION["error_msg"]) && empty($_POST["v_blackhole"]) && is_file(dirname(__DIR__, 2) . "/inc/mail_forward_policy.php")) {
+		require_once dirname(__DIR__, 2) . "/inc/mail_forward_policy.php";
+		$mfp_posted = hst_mfp_parse_targets((string) ($_POST["v_fwd"] ?? ""));
+		$mfp_existing = array_values(array_filter(array_map("trim", is_array($vfwd ?? null) ? $vfwd : [])));
+		$mfp_added = array_values(array_udiff($mfp_posted, $mfp_existing, "strcasecmp"));
+		if (!empty($mfp_added)) {
+			$mfp_error = hst_mfp_validate_web_forwards($mfp_added, trim((string) $user, "'\''\""), "forward");
+			if ($mfp_error !== null) {
+				$_SESSION["error_msg"] = $mfp_error;
+			}
+		}
+		unset($mfp_posted, $mfp_existing, $mfp_added, $mfp_error);
+	}
+	// [hestia-mail-forward-policy-v1-edit-end]
+
+PHP;
+    $updated = str_replace($anchor1, $snippet1 . $anchor1, $clean);
+    $updated = str_replace($anchor2, $snippet2 . $anchor2, $updated);
+} elseif ($tag === "web_api_index.php") {
+    $fn_marker = "function api_connection(";
+    $fn_pos = strpos($clean, $fn_marker);
+    if ($fn_pos === false) {
+        fwrite(STDERR, "ERROR: api_connection() not found in $src\n");
+        exit(2);
+    }
+    $anchor = "\t// Prepare command\n\t\$cmdquery = HESTIA_CMD . escapeshellcmd(\$hst_cmd);";
+    $after = substr($clean, $fn_pos);
+    if (substr_count($after, $anchor) !== 1) {
+        fwrite(STDERR, "ERROR: Unique api_connection anchor \"// Prepare command\" not found in $src\n");
+        exit(2);
+    }
+    $snippet = <<<'\''PHP'\''
+	// [hestia-mail-forward-policy-v1-api-start]
+	if ($key_user != $root_user && is_file(dirname(__DIR__) . "/inc/mail_forward_policy.php")) {
+		require_once dirname(__DIR__) . "/inc/mail_forward_policy.php";
+		$mfp_api_error = hst_mfp_validate_api_command($hst_cmd, $hst_cmd_args, (string) $key_user, (string) $root_user);
+		if ($mfp_api_error !== null) {
+			api_error(E_FORBIDDEN, $mfp_api_error, $hst_return, true, (string) $key_user);
+		}
+		unset($mfp_api_error);
+	}
+	// [hestia-mail-forward-policy-v1-api-end]
+
+PHP;
+    $pos = strpos($clean, $anchor, $fn_pos);
+    $updated = substr_replace($clean, $snippet . $anchor, $pos, strlen($anchor));
+} else {
+    fwrite(STDERR, "ERROR: Unknown target tag $tag\n");
+    exit(1);
+}
+
+$out = ($eol === "\r\n") ? str_replace("\n", "\r\n", $updated) : $updated;
+file_put_contents($dst, $out);
+' "$mode" "$tag" "$target" "$tmp_out" || rc=$?
+
+        if [ "$rc" -ne 0 ]; then
+            rm -f "$tmp_out"
+            return "$rc"
+        fi
+
+        if ! "$php_bin" -l "$tmp_out" >/dev/null 2>&1; then
+            echo "ERROR: PHP syntax check failed for candidate $target; keeping existing file untouched." >&2
+            "$php_bin" -l "$tmp_out" >&2 || true
+            rm -f "$tmp_out"
+            return 1
+        fi
+
+        if cmp -s "$tmp_out" "$target"; then
+            rm -f "$tmp_out"
+            echo "  -> [OK] $target already up to date"
+            continue
+        fi
+
+        backup_target_file "$target" "$tag"
+        if [ "$(id -u)" -eq 0 ]; then
+            install -o root -g root -m 0644 "$tmp_out" "$target"
+        else
+            install -m 0644 "$tmp_out" "$target"
+        fi
+        rm -f "$tmp_out"
+        if [ "$mode" = "apply" ]; then
+            echo "  -> [OK] Patched $target"
+        else
+            echo "  -> [OK] Restored $target"
+        fi
+    done
+
+    if [ "$mode" = "disable" ]; then
+        rm -f "$HESTIA/web/inc/mail_forward_policy.php" "$HESTIA/web/js/custom_scripts/mail-forward-policy-ui.php"
+        echo "  -> [OK] Removed helper and UI hint files (preserved $MFP_CONF)"
+    fi
+}
+
+cmd_status() {
+    local php_bin
+    php_bin="$(resolve_php_bin)" || {
+        echo "ERROR: PHP CLI binary not found." >&2
+        return 1
+    }
+
+    local helper="$HESTIA/web/inc/mail_forward_policy.php"
+    local ui_hint="$HESTIA/web/js/custom_scripts/mail-forward-policy-ui.php"
+    local add_ok=0 edit_ca_ok=0 edit_fwd_ok=0 api_ok=0
+
+    grep -q "hestia-mail-forward-policy-v1-add-start" "$HESTIA/web/add/mail/index.php" 2>/dev/null && add_ok=1
+    grep -q "hestia-mail-forward-policy-v1-catchall-start" "$HESTIA/web/edit/mail/index.php" 2>/dev/null && edit_ca_ok=1
+    grep -q "hestia-mail-forward-policy-v1-edit-start" "$HESTIA/web/edit/mail/index.php" 2>/dev/null && edit_fwd_ok=1
+    grep -q "hestia-mail-forward-policy-v1-api-start" "$HESTIA/web/api/index.php" 2>/dev/null && api_ok=1
+
+    local helper_state="missing"
+    [ -f "$helper" ] && helper_state="present"
+    local ui_state="missing"
+    [ -f "$ui_hint" ] && ui_state="present"
+
+    local cfg_json="{}"
+    if [ -f "$helper" ]; then
+        cfg_json="$("$php_bin" -r '
+define("HESTIA_MFP_TEST_MODE", true);
+define("HESTIA_MFP_CONF", $argv[1]);
+require_once $argv[2];
+$c = hst_mfp_load_config();
+$c["allowlist_list"] = array_keys($c["allowlist_domains"]);
+echo json_encode($c);
+' "$MFP_CONF" "$helper" 2>/dev/null || echo "{}")"
+    fi
+
+    echo "=== HestiaCP Mail Forward Policy Status ==="
+    echo "Config file:  $MFP_CONF ($([ -f "$MFP_CONF" ] && echo "present" || echo "missing"))"
+    if [ "$cfg_json" != "{}" ]; then
+        "$php_bin" -r '
+$c = json_decode($argv[1], true);
+if (is_array($c)) {
+    echo "Enabled:      " . (!empty($c["enabled"]) ? "yes" : "no") . "\n";
+    echo "Scope:        " . ($c["scope"] ?? "user") . "\n";
+    echo "Block Catch:  " . (!empty($c["block_catchall"]) ? "yes" : "no") . "\n";
+    echo "Enforce API:  " . (!empty($c["enforce_api"]) ? "yes" : "no") . "\n";
+    echo "UI Hint:      " . (!empty($c["enable_ui_hint"]) ? "yes" : "no") . "\n";
+    echo "Allowlist:    " . (!empty($c["allowlist_list"]) ? implode(",", $c["allowlist_list"]) : "(none)") . "\n";
+}
+' "$cfg_json"
+    fi
+    echo "Helper PHP:   $helper ($helper_state)"
+    echo "UI Hint PHP:  $ui_hint ($ui_state)"
+    echo "Hook add:     $([ "$add_ok" -eq 1 ] && echo "active" || echo "missing") ($HESTIA/web/add/mail/index.php)"
+    echo "Hook catch:   $([ "$edit_ca_ok" -eq 1 ] && echo "active" || echo "missing") ($HESTIA/web/edit/mail/index.php)"
+    echo "Hook edit:    $([ "$edit_fwd_ok" -eq 1 ] && echo "active" || echo "missing") ($HESTIA/web/edit/mail/index.php)"
+    echo "Hook API:     $([ "$api_ok" -eq 1 ] && echo "active" || echo "missing") ($HESTIA/web/api/index.php)"
+
+    if [ "$helper_state" = "present" ] && [ "$add_ok" -eq 1 ] && [ "$edit_ca_ok" -eq 1 ] && [ "$edit_fwd_ok" -eq 1 ] && [ "$api_ok" -eq 1 ]; then
+        return 0
+    fi
+    return 1
+}
+
+cmd_audit() {
+    local quiet=0 json_out=0 arg
+    for arg in "$@"; do
+        case "$arg" in
+            --quiet) quiet=1 ;;
+            --json)  json_out=1 ;;
+            *)
+                echo "ERROR: Unknown --audit option: $arg" >&2
+                return 1
+                ;;
+        esac
+    done
+
+    local php_bin
+    php_bin="$(resolve_php_bin)" || {
+        echo "ERROR: PHP CLI binary not found." >&2
+        return 1
+    }
+
+    local helper="$HESTIA/web/inc/mail_forward_policy.php"
+    local script_dir helper_fallback
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    helper_fallback="$script_dir/inc/mail_forward_policy.php"
+    if [ ! -f "$helper" ] && [ -f "$helper_fallback" ]; then
+        helper="$helper_fallback"
+    fi
+    if [ ! -f "$helper" ]; then
+        echo "ERROR: mail_forward_policy.php not found." >&2
+        return 1
+    fi
+
+    "$php_bin" -r '
+define("HESTIA_MFP_TEST_MODE", true);
+define("HESTIA_MFP_CONF", $argv[1]);
+define("HESTIA_MFP_EXIM_DOMAINS_DIR", $argv[4]);
+require_once $argv[5];
+
+$hestia = rtrim($argv[2], "/");
+$home_root = rtrim($argv[3], "/");
+$exim_dir = rtrim($argv[4], "/");
+$quiet = ($argv[6] === "1");
+$json_mode = ($argv[7] === "1");
+
+$cfg = hst_mfp_load_config($argv[1]);
+$scope = $cfg["scope"] ?? "user";
+$allowlist = is_array($cfg["allowlist_domains"] ?? null) ? $cfg["allowlist_domains"] : [];
+
+function parse_kv_line(string $line): array {
+    $res = [];
+    if (preg_match_all("/([A-Z0-9_]+)=\x27([^\x27]*)\x27/", $line, $matches, PREG_SET_ORDER)) {
+        foreach ($matches as $m) {
+            $res[$m[1]] = $m[2];
+        }
+    }
+    return $res;
+}
+
+$users_dir = $hestia . "/data/users";
+$user_domains = [];
+$server_domains = $allowlist;
+
+if (is_dir($exim_dir)) {
+    foreach (scandir($exim_dir) ?: [] as $entry) {
+        if ($entry === "." || $entry === "..") continue;
+        if (is_dir($exim_dir . "/" . $entry)) {
+            hst_mfp_add_domain_key($server_domains, $entry);
+        }
+    }
+}
+
+$users = [];
+if (is_dir($users_dir)) {
+    foreach (scandir($users_dir) ?: [] as $u) {
+        if ($u === "." || $u === "..") continue;
+        if (is_dir($users_dir . "/" . $u)) {
+            $users[] = $u;
+            $user_domains[$u] = $allowlist;
+            $mail_conf = $users_dir . "/" . $u . "/mail.conf";
+            if (is_file($mail_conf)) {
+                foreach (file($mail_conf, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [] as $line) {
+                    $kv = parse_kv_line($line);
+                    if (!empty($kv["DOMAIN"])) {
+                        hst_mfp_add_domain_key($user_domains[$u], $kv["DOMAIN"]);
+                        hst_mfp_add_domain_key($server_domains, $kv["DOMAIN"]);
+                    }
+                }
+            }
+        }
+    }
+}
+
+$findings = [];
+$checked_accounts = 0;
+$checked_domains = 0;
+
+foreach ($users as $u) {
+    $u_allowed = ($scope === "server") ? $server_domains : ($user_domains[$u] ?? $allowlist);
+
+    // 1. Account forwards in $HESTIA/data/users/<user>/mail/<domain>.conf
+    $mail_dir = $users_dir . "/" . $u . "/mail";
+    if (is_dir($mail_dir)) {
+        foreach (glob($mail_dir . "/*.conf") ?: [] as $dom_conf) {
+            $dom = basename($dom_conf, ".conf");
+            foreach (file($dom_conf, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [] as $line) {
+                $kv = parse_kv_line($line);
+                if (!isset($kv["ACCOUNT"])) continue;
+                $checked_accounts++;
+                $fwd_raw = trim((string) ($kv["FWD"] ?? ""));
+                if ($fwd_raw === "") continue;
+                foreach (hst_mfp_parse_targets($fwd_raw) as $target) {
+                    if (strtolower($target) === ":blackhole:") continue;
+                    $tdom = hst_mfp_extract_domain($target);
+                    if ($tdom === "" || !isset($u_allowed[$tdom])) {
+                        $findings[] = [
+                            "type" => "account_forward",
+                            "user" => $u,
+                            "source" => $kv["ACCOUNT"] . "@" . $dom,
+                            "target" => $target,
+                            "fwd_only" => ($kv["FWD_ONLY"] ?? "no") === "yes",
+                        ];
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. Domain catch-all redirects in $HESTIA/data/users/<user>/mail.conf
+    $mail_conf = $users_dir . "/" . $u . "/mail.conf";
+    if (is_file($mail_conf)) {
+        foreach (file($mail_conf, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [] as $line) {
+            $kv = parse_kv_line($line);
+            if (empty($kv["DOMAIN"])) continue;
+            $checked_domains++;
+            $ca = trim((string) ($kv["CATCHALL"] ?? ""));
+            if ($ca === "") continue;
+            $tdom = hst_mfp_extract_domain($ca);
+            if ($tdom === "" || !isset($u_allowed[$tdom])) {
+                $findings[] = [
+                    "type" => "catchall",
+                    "user" => $u,
+                    "source" => "*@" . $kv["DOMAIN"],
+                    "target" => $ca,
+                ];
+            }
+        }
+    }
+
+    // 3. Legacy ~/.forward
+    $dot_fwd = $home_root . "/" . $u . "/.forward";
+    if (is_file($dot_fwd)) {
+        foreach (file($dot_fwd, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [] as $line) {
+            $trim = trim($line);
+            if ($trim === "" || str_starts_with($trim, "#")) continue;
+            if (strpos($trim, "@") !== false) {
+                $tdom = hst_mfp_extract_domain($trim);
+                if ($tdom === "" || !isset($u_allowed[$tdom])) {
+                    $findings[] = [
+                        "type" => "dot_forward",
+                        "user" => $u,
+                        "source" => $dot_fwd,
+                        "target" => $trim,
+                    ];
+                }
+            }
+        }
+    }
+
+    // 4. Dovecot Sieve redirect rules (.dovecot.sieve and sieve/*.sieve)
+    $sieve_files = array_merge(
+        glob($home_root . "/" . $u . "/mail/*/*/.dovecot.sieve") ?: [],
+        glob($home_root . "/" . $u . "/mail/*/*/sieve/*.sieve") ?: []
+    );
+    foreach ($sieve_files as $sf) {
+        if (!is_file($sf)) continue;
+        $raw_sieve = file_get_contents($sf) ?: "";
+        if (preg_match_all("/\bredirect\b(?:\s+:[a-zA-Z0-9_]+(?:\s+\"[^\"]*\")?)*\s+\"([^\"]+)\"/i", $raw_sieve, $sm)) {
+            foreach ($sm[1] as $target) {
+                $tdom = hst_mfp_extract_domain($target);
+                if ($tdom === "" || !isset($u_allowed[$tdom])) {
+                    $findings[] = [
+                        "type" => "sieve_redirect",
+                        "user" => $u,
+                        "source" => $sf,
+                        "target" => $target,
+                    ];
+                }
+            }
+        }
+    }
+}
+
+if ($json_mode) {
+    echo json_encode([
+        "scope" => $scope,
+        "checked_users" => count($users),
+        "checked_domains" => $checked_domains,
+        "checked_accounts" => $checked_accounts,
+        "external_count" => count($findings),
+        "findings" => $findings,
+    ], JSON_PRETTY_PRINT) . "\n";
+} elseif (!$quiet) {
+    echo "Mail Forward Policy Audit (scope=$scope, users=" . count($users) . ", domains=$checked_domains, accounts=$checked_accounts)\n";
+    if (empty($findings)) {
+        echo "OK: 0 external mail forwards, catch-all redirects, .forward files, or Sieve redirects found.\n";
+    } else {
+        echo "WARN: Found " . count($findings) . " external redirect(s):\n";
+        foreach ($findings as $f) {
+            echo "  - [" . $f["type"] . "] user=" . $f["user"] . " source=" . $f["source"] . " -> " . $f["target"] . "\n";
+        }
+    }
+}
+
+exit(empty($findings) ? 0 : 2);
+' "$MFP_CONF" "$HESTIA" "$HESTIA_HOME_ROOT" "$EXIM_DOMAINS_DIR" "$helper" "$quiet" "$json_out"
+}
+
+cmd_check() {
+    if [ "$#" -lt 2 ]; then
+        echo "ERROR: Usage: v-mail-forward-policy --check USER TARGET" >&2
+        return 1
+    fi
+    local target_user="$1"
+    local target_addr="$2"
+    local php_bin
+    php_bin="$(resolve_php_bin)" || {
+        echo "ERROR: PHP CLI binary not found." >&2
+        return 1
+    }
+
+    local helper="$HESTIA/web/inc/mail_forward_policy.php"
+    local script_dir helper_fallback
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    helper_fallback="$script_dir/inc/mail_forward_policy.php"
+    [ ! -f "$helper" ] && [ -f "$helper_fallback" ] && helper="$helper_fallback"
+    if [ ! -f "$helper" ]; then
+        echo "ERROR: mail_forward_policy.php not found." >&2
+        return 1
+    fi
+
+    "$php_bin" -r '
+define("HESTIA_MFP_TEST_MODE", true);
+define("HESTIA_MFP_CONF", $argv[1]);
+define("HESTIA_MFP_EXIM_DOMAINS_DIR", $argv[3]);
+define("HESTIA_MFP_CMD_PREFIX", "");
+require_once $argv[4];
+
+$hestia = rtrim($argv[2], "/");
+$target_user = $argv[5];
+$target_addr = $argv[6];
+
+function parse_kv_line_chk(string $line): array {
+    $res = [];
+    if (preg_match_all("/([A-Z0-9_]+)=\x27([^\x27]*)\x27/", $line, $matches, PREG_SET_ORDER)) {
+        foreach ($matches as $m) {
+            $res[$m[1]] = $m[2];
+        }
+    }
+    return $res;
+}
+
+$cfg = hst_mfp_load_config($argv[1]);
+if (empty($cfg["enabled"])) {
+    echo "ALLOWED: policy is disabled in $argv[1]\n";
+    exit(0);
+}
+
+$user_conf = $hestia . "/data/users/" . $target_user . "/user.conf";
+if (is_file($user_conf)) {
+    $raw_uc = file_get_contents($user_conf) ?: "";
+    if (preg_match("/^ROLE=\x27admin\x27/m", $raw_uc)) {
+        echo "ALLOWED: $target_user has ROLE=admin\n";
+        exit(0);
+    }
+}
+
+$allowed = is_array($cfg["allowlist_domains"] ?? null) ? $cfg["allowlist_domains"] : [];
+if (($cfg["scope"] ?? "user") === "server") {
+    $allowed = hst_mfp_get_allowed_domains($target_user, $cfg);
+} else {
+    $mail_conf = $hestia . "/data/users/" . $target_user . "/mail.conf";
+    if (is_file($mail_conf)) {
+        foreach (file($mail_conf, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [] as $line) {
+            $kv = parse_kv_line_chk($line);
+            if (!empty($kv["DOMAIN"])) {
+                hst_mfp_add_domain_key($allowed, $kv["DOMAIN"]);
+            }
+        }
+    }
+}
+
+if (strtolower(trim($target_addr)) === ":blackhole:") {
+    echo "ALLOWED: :blackhole:\n";
+    exit(0);
+}
+
+$tdom = hst_mfp_extract_domain($target_addr);
+if ($tdom !== "" && isset($allowed[$tdom])) {
+    echo "ALLOWED: $target_addr (domain $tdom allowed under scope=" . $cfg["scope"] . ")\n";
+    exit(0);
+}
+
+echo "BLOCKED: $target_addr (domain " . ($tdom !== "" ? $tdom : "invalid") . " not allowed for non-admin user $target_user under scope=" . $cfg["scope"] . ")\n";
+exit(1);
+' "$MFP_CONF" "$HESTIA" "$EXIM_DOMAINS_DIR" "$helper" "$target_user" "$target_addr"
+}
+
+main() {
+    local action="${1:---status}"
+    case "$action" in
+        --apply|--install)
+            run_patch_engine "apply"
+            ;;
+        --disable|--uninstall)
+            run_patch_engine "disable"
+            ;;
+        --status)
+            cmd_status
+            ;;
+        --audit)
+            shift
+            cmd_audit "$@"
+            ;;
+        --check)
+            shift
+            cmd_check "$@"
+            ;;
+        --help|-h)
+            print_help
+            ;;
+        *)
+            echo "ERROR: Unknown option: $action" >&2
+            print_help >&2
+            exit 1
+            ;;
+    esac
+}
+
+main "$@"

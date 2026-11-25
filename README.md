@@ -62,6 +62,7 @@ Automation and maintenance scripts to enhance HestiaCP's default capabilities.
 | **[Logrotate Optimizer Guide](scripts/logrotate-optimize/README.md)** | `v-optimize-logrotate` | Event-driven (`logrotate.d`) | Upgrades Nginx & Apache rotation from `weekly rotate 4` to `daily rotate 14` |
 | **[Fail2Ban Email Optimizer Guide](scripts/fail2ban-optimize/README.md)** | `v-optimize-fail2ban` | Daemon (`jail.d/*.local`) | Relaxes Dovecot/Exim bans (`5` retries / `2h` ban) so typos don't cause 7-day lockouts |
 | **[Nginx `.txt` Cache Hardener Guide](scripts/nginx-txt-nocache/README.md)** | `v-patch-nginx-txt-nocache` | Auto-healed daily (`04:50`) | Removes `.txt` from static `expires max` rules so `robots.txt`/`llms.txt`/`ads.txt` stay fresh |
+| **[Mail Forward Policy Guide](scripts/mail-forward-policy/README.md)** | `v-mail-forward-policy` | Web panel / API / `--audit` | Restricts non-admin external forwards and external Catch-Alls while allowing admin/impersonation exceptions |
 
 #### [System Cleanup (`v-clean-garbage`)](scripts/clean-garbage/)
 - Cleans old system logs (Journalctl), rotated logs, and temp files.
@@ -124,6 +125,10 @@ Automation and maintenance scripts to enhance HestiaCP's default capabilities.
 
 #### [Nginx `.txt` Cache Hardener (`v-patch-nginx-txt-nocache`)](scripts/nginx-txt-nocache/)
 - Removes `txt` from Nginx static `expires max` location blocks across PHP-FPM templates, active domain configs, and reverse-proxy `PROXY_EXT` definitions (`web.conf` and HestiaCP proxy defaults) so `.txt` files (`robots.txt`, `llms.txt`, `ads.txt`, `security.txt`) are not cached indefinitely and remain clean across domain rebuilds.
+
+#### [Mail Forward Policy (`v-mail-forward-policy`)](scripts/mail-forward-policy/)
+- Prevents non-admin HestiaCP users (and non-admin API keys) from adding external mail forwards or external Catch-All redirects, protecting shared server IP reputation while allowing administrators (including during user impersonation) to add exceptions.
+- Supports `SCOPE="user"` (own mail domains only, preventing cross-tenant domain discovery) or `SCOPE="server"` (any mail domain hosted on the server), plus optional `ALLOWLIST_DOMAINS`, UI panel guidance, and `v-mail-forward-policy --audit` / `v-security-audit` (`S67`) scanning.
 
 ---
 

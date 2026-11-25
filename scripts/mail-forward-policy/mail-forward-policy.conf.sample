@@ -1,0 +1,24 @@
+# HestiaCP Mail Forward Policy Configuration
+# Managed by hestiacp-useful-tools (v-mail-forward-policy)
+# Permissions must stay 0644 root:root so HestiaCP web PHP-FPM (hestiaweb) can read policy settings.
+# This file must NEVER contain passwords or API keys.
+
+# Enable or disable enforcement in the HestiaCP web panel and API ("yes" or "no")
+ENABLED="yes"
+
+# Allowed destination domains for non-admin users:
+#   "user"   = allow forwarding ONLY to mail domains owned by the same HestiaCP user (recommended; prevents cross-tenant domain discovery)
+#   "server" = allow forwarding to any mail domain hosted on this HestiaCP server
+SCOPE="user"
+
+# Also block non-admin users from configuring an external domain Catch-All address ("yes" or "no")
+BLOCK_CATCHALL="yes"
+
+# Enforce the same policy for non-admin HestiaCP API calls when API_SYSTEM=2 ("yes" or "no")
+ENFORCE_API="yes"
+
+# Show an informational notice under "Forward to" / "Catch-All" for non-admin panel sessions ("yes" or "no")
+ENABLE_UI_HINT="yes"
+
+# Optional comma-separated allowlist of trusted external destination domains (lowercase, e.g. "corp.example.com,partner.example.org")
+ALLOWLIST_DOMAINS=""

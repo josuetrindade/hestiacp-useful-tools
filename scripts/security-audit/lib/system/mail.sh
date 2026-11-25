@@ -95,6 +95,95 @@ check_mail() {
     else
         result_info "S37" "No mail domains configured"
     fi
+
+    # S67: Check for external mail account forwards or external catch-all redirects (IP reputation / SPF risk)
+    local ext_count=0
+    local ext_samples=()
+    local server_dom_list=" "
+    local u_item m_conf m_line m_dom m_fwd m_acc m_ca fwd_item fwd_dom
+    if [ -d "${EXIM_DOMAINS_DIR:-/etc/exim4/domains}" ]; then
+        for d_path in "${EXIM_DOMAINS_DIR:-/etc/exim4/domains}"/*; do
+            [ -d "$d_path" ] || continue
+            server_dom_list="${server_dom_list}$(basename "$d_path" | tr '[:upper:]' '[:lower:]' | sed 's/\.*$//') "
+        done
+    fi
+    local hestia_root="${HESTIA:-/usr/local/hestia}"
+    for u_item in $(hestia_user_list); do
+        m_conf="${hestia_root}/data/users/${u_item}/mail.conf"
+        [ -f "$m_conf" ] || continue
+        while IFS= read -r m_line; do
+            m_dom=$(echo "$m_line" | grep -oE "DOMAIN='[^']*'" | cut -d"'" -f2 | tr '[:upper:]' '[:lower:]' | sed 's/\.*$//')
+            [ -n "$m_dom" ] && server_dom_list="${server_dom_list}${m_dom} "
+        done < "$m_conf"
+    done
+
+    for u_item in $(hestia_user_list); do
+        local u_conf="${hestia_root}/data/users/${u_item}/user.conf"
+        if [ -f "$u_conf" ] && grep -q "^SUSPENDED='yes'" "$u_conf" 2>/dev/null; then
+            continue
+        fi
+        local suspended_doms=" "
+        m_conf="${hestia_root}/data/users/${u_item}/mail.conf"
+        if [ -f "$m_conf" ]; then
+            while IFS= read -r m_line; do
+                m_dom=$(echo "$m_line" | grep -oE "DOMAIN='[^']*'" | cut -d"'" -f2)
+                if echo "$m_line" | grep -q "SUSPENDED='yes'"; then
+                    [ -n "$m_dom" ] && suspended_doms="${suspended_doms}${m_dom} "
+                    continue
+                fi
+                m_ca=$(echo "$m_line" | grep -oE "CATCHALL='[^']*'" | cut -d"'" -f2 | xargs)
+                [ -z "$m_ca" ] && continue
+                fwd_dom=$(printf '%s' "$m_ca" | awk -F'@' 'NF==2{print tolower($2)}' | sed 's/\.*$//')
+                if [ -z "$fwd_dom" ] || [[ "$server_dom_list" != *" ${fwd_dom} "* ]]; then
+                    ext_count=$((ext_count + 1))
+                    if [ ${#ext_samples[@]} -lt 5 ]; then
+                        ext_samples+=("*@${m_dom}->${m_ca}")
+                    fi
+                fi
+            done < "$m_conf"
+        fi
+        local m_dir="${hestia_root}/data/users/${u_item}/mail"
+        if [ -d "$m_dir" ]; then
+            for dom_conf in "$m_dir"/*.conf; do
+                [ -f "$dom_conf" ] || continue
+                m_dom=$(basename "$dom_conf" .conf)
+                [[ "$suspended_doms" == *" ${m_dom} "* ]] && continue
+                while IFS= read -r m_line; do
+                    if echo "$m_line" | grep -q "SUSPENDED='yes'"; then
+                        continue
+                    fi
+                    m_acc=$(echo "$m_line" | grep -oE "ACCOUNT='[^']*'" | cut -d"'" -f2)
+                    m_fwd=$(echo "$m_line" | grep -oE "FWD='[^']*'" | cut -d"'" -f2)
+                    [ -z "$m_fwd" ] && continue
+                    local fwd_items=()
+                    IFS=', ' read -r -a fwd_items <<< "$m_fwd"
+                    for fwd_item in "${fwd_items[@]}"; do
+                        fwd_item="${fwd_item// /}"
+                        [ -z "$fwd_item" ] && continue
+                        [ "${fwd_item,,}" = ":blackhole:" ] && continue
+                        fwd_dom=$(printf '%s' "$fwd_item" | awk -F'@' 'NF==2{print tolower($2)}' | sed 's/\.*$//')
+                        if [ -z "$fwd_dom" ] || [[ "$server_dom_list" != *" ${fwd_dom} "* ]]; then
+                            ext_count=$((ext_count + 1))
+                            if [ ${#ext_samples[@]} -lt 5 ]; then
+                                ext_samples+=("${m_acc}@${m_dom}->${fwd_item}")
+                            fi
+                        fi
+                    done
+                done < "$dom_conf"
+            done
+        fi
+    done
+
+    if [ "$ext_count" -eq 0 ]; then
+        result_pass "S67" "No external mail forwards or external catch-all redirects found"
+    else
+        local ext_sample_str
+        ext_sample_str=$(IFS=', '; echo "${ext_samples[*]}")
+        if [ "$ext_count" -gt "${#ext_samples[@]}" ]; then
+            ext_sample_str="${ext_sample_str}, ..."
+        fi
+        result_warn "S67" "Found ${ext_count} external mail forward/catch-all target(s) (IP reputation / SPF risk): ${ext_sample_str}"
+    fi
 }
 
 

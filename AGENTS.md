@@ -31,6 +31,7 @@
 | [`scripts/logrotate-optimize/`](./scripts/logrotate-optimize/) | `v-optimize-logrotate` — upgrades Apache & Nginx log rotation from weekly to daily (`rotate 14`) |
 | [`scripts/fail2ban-optimize/`](./scripts/fail2ban-optimize/) | `v-optimize-fail2ban` — balances Dovecot & Exim Fail2Ban thresholds via `.local` precedence |
 | [`scripts/nginx-txt-nocache/`](./scripts/nginx-txt-nocache/) | `v-patch-nginx-txt-nocache` — removes `.txt` from static `expires max` blocks and `PROXY_EXT` defaults |
+| [`scripts/mail-forward-policy/`](./scripts/mail-forward-policy/) | `v-mail-forward-policy` - restricts non-admin external mail forwards and external Catch-All redirects while preserving admin impersonation |
 | [`mariadb_optimize/`](./mariadb_optimize/) | MariaDB configuration tuning for HestiaCP workloads |
 | [`php_optimize/`](./php_optimize/) | PHP-FPM pool and OPcache optimization scripts |
 | [`swap_setup/`](./swap_setup/) | Automated swapfile creation and `vm.swappiness` tuning |

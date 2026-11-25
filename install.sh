@@ -9,6 +9,7 @@
 #   bash install.sh --setup-crons --crowdsec  — install all + crons + CrowdSec IPS
 #   bash install.sh --all                     — install everything (all scripts + crons + CrowdSec)
 #   bash install.sh --fail2ban                — standalone: install & apply Fail2Ban email optimizer
+#   bash install.sh --mail-forward-policy     - standalone: install & apply Mail Forward Policy
 #   bash install.sh --harden                  — standalone: install & apply Server Hardening (Pillars 1-5)
 #   bash install.sh --crowdsec                — standalone: install & apply Server Hardening + CrowdSec (Pillars 1-6)
 
@@ -30,6 +31,7 @@ SETUP_CROWDSEC=false
 FULL_INSTALL_ALL=false
 WANT_FAIL2BAN_ONLY=false
 WANT_HARDEN_ONLY=false
+WANT_MFP_ONLY=false
 CROWDSEC_WIZARD_ONLY=false
 RUN_ONLY_MODULE=""
 RUN_ONLY_ARGS=()
@@ -48,6 +50,7 @@ print_usage() {
     echo ""
     echo "Standalone single-module shortcuts:"
     echo "  --fail2ban                Install and apply only the Fail2Ban email optimizer"
+    echo "  --mail-forward-policy     Install and apply only the Mail Forward Policy"
     echo "  --harden                  Install and apply only Server Hardening (Pillars 1-5)"
     echo "  --crowdsec                Install and apply only Server Hardening + CrowdSec (All 6 Pillars)"
     echo ""
@@ -63,6 +66,7 @@ for arg in "$@"; do
         --crowdsec)                SETUP_CROWDSEC=true ;;
         --all)                     FULL_INSTALL_ALL=true; SETUP_CRONS=true; SETUP_CROWDSEC=true ;;
         --fail2ban)                WANT_FAIL2BAN_ONLY=true ;;
+        --mail-forward-policy)     WANT_MFP_ONLY=true ;;
         --harden)                  WANT_HARDEN_ONLY=true ;;
         --allow-untested-hestia)   export ALLOW_UNTESTED_HESTIA=1 ;;
         --apt-hook)                export HESTIA_APT_HOOK=1 ;;
@@ -80,12 +84,18 @@ done
 
 # Resolve standalone vs full-install flag combinations without silent drops
 if [ "$WANT_FAIL2BAN_ONLY" = true ]; then
-    if [ "$WANT_HARDEN_ONLY" = true ] || [ "$SETUP_CROWDSEC" = true ] || [ "$SETUP_CRONS" = true ] || [ "$FULL_INSTALL_ALL" = true ]; then
+    if [ "$WANT_MFP_ONLY" = true ] || [ "$WANT_HARDEN_ONLY" = true ] || [ "$SETUP_CROWDSEC" = true ] || [ "$SETUP_CRONS" = true ] || [ "$FULL_INSTALL_ALL" = true ]; then
         echo "ERROR: --fail2ban is a standalone module shortcut and cannot be combined with other flags." >&2
         exit 1
     fi
     RUN_ONLY_MODULE="fail2ban-optimize"
     RUN_ONLY_ARGS=("--force")
+elif [ "$WANT_MFP_ONLY" = true ]; then
+    if [ "$WANT_HARDEN_ONLY" = true ] || [ "$SETUP_CROWDSEC" = true ] || [ "$SETUP_CRONS" = true ] || [ "$FULL_INSTALL_ALL" = true ]; then
+        echo "ERROR: --mail-forward-policy is a standalone module shortcut and cannot be combined with other flags." >&2
+        exit 1
+    fi
+    RUN_ONLY_MODULE="mail-forward-policy"
 elif [ "$WANT_HARDEN_ONLY" = true ]; then
     if [ "$SETUP_CRONS" = true ] || [ "$FULL_INSTALL_ALL" = true ]; then
         echo "ERROR: --harden is a standalone module shortcut; omit --harden to install all modules." >&2

@@ -484,6 +484,12 @@ else
     fail "Restic export regression suite failed"
 fi
 
+if bash "$REPO_ROOT/tests/mail-forward-policy.test.sh"; then
+    pass "Mail forward policy suite passed (hooks, PHP enforcement, audit, S67)"
+else
+    fail "Mail forward policy regression suite failed"
+fi
+
 # 5. v-security-audit Accuracy (S15c .local filter & S38/S59 ACCOUNTS='0')
 # -----------------------------------------------------------------------------
 echo ""
