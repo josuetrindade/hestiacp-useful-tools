@@ -29,6 +29,11 @@ if (!is_file($hst_mfp_inc)) {
 }
 require_once $hst_mfp_inc;
 
+if (!function_exists("hst_mfp_load_config")) {
+	unset($hst_mfp_req_path, $hst_mfp_inc);
+	return;
+}
+
 $hst_mfp_cfg = hst_mfp_load_config();
 if (empty($hst_mfp_cfg["enabled"]) || empty($hst_mfp_cfg["enable_ui_hint"])) {
 	unset($hst_mfp_req_path, $hst_mfp_inc, $hst_mfp_cfg);

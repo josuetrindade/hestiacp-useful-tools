@@ -42,13 +42,17 @@ install_hestia_apt_hook() {
     fi
 
     if [ -f "$repo_root/install.sh" ] && [ ! -L "$repo_root/install.sh" ] && repo_tree_is_root_safe "$repo_root"; then
-        local tmp_apt_hook
+        local tmp_apt_hook hook_tpl
         tmp_apt_hook="$(umask 022 && mktemp "$hook_dir/.${hook_base}.XXXXXX")"
-        cat > "$tmp_apt_hook" << APT_EOF
-// Managed by hestiacp-useful-tools ($label)
+        IFS='' read -r -d '' hook_tpl << 'APT_EOF' || true
+// Managed by hestiacp-useful-tools (__LABEL__)
 // Automatically re-applies HestiaCP custom patches after apt/dpkg package updates
-DPkg::Post-Invoke { "if [ -d '$repo_root' ] && [ ! -L '$repo_root' ] && [ -f '$repo_root/install.sh' ] && [ ! -L '$repo_root/install.sh' ] && [ -O '$repo_root' ] && [ -O '$repo_root/install.sh' ] && /bin/bash -c 'cur=$repo_root; while true; do [ ! -L \$cur ] && [ -O \$cur ] || exit 1; p=\$(stat -c %a \$cur 2>/dev/null || echo 777); [[ ! \$p =~ [2367].\$ && ! \$p =~ [2367]\$ ]] || exit 1; [ \$cur = / ] && break; cur=\$(dirname \$cur); done' && ! find -P '$repo_root' \( ! -user 0 -o -type l -o -perm /022 \) -print -quit 2>/dev/null | grep -q .; then /bin/bash '$repo_root/install.sh' $install_args </dev/null >/dev/null 2>&1 || true; fi"; };
+DPkg::Post-Invoke { "/bin/bash -c 'r=\"$1\"; [ -d \"$r\" ] && [ ! -L \"$r\" ] && [ -f \"$r/install.sh\" ] && [ ! -L \"$r/install.sh\" ] && [ -O \"$r\" ] && [ -O \"$r/install.sh\" ] || exit 0; cur=\"$r\"; while true; do [ ! -L \"$cur\" ] && [ -O \"$cur\" ] || exit 0; p=$(stat -c %a \"$cur\" 2>/dev/null || echo 777); [[ ! \"$p\" =~ [2367].$ && ! \"$p\" =~ [2367]$ ]] || exit 0; [ \"$cur\" = / ] && break; cur=$(dirname \"$cur\"); done; unsafe=$(find -P \"$r\" \( ! -user 0 -o -type l -o -perm /022 \) -print -quit 2>/dev/null || echo err); [ -z \"$unsafe\" ] && /bin/bash \"$r/install.sh\" __ARGS__ </dev/null >/dev/null 2>&1 || true' _ '__REPO__' || true"; };
 APT_EOF
+        hook_tpl="${hook_tpl//__LABEL__/$label}"
+        hook_tpl="${hook_tpl//__ARGS__/$install_args}"
+        hook_tpl="${hook_tpl//__REPO__/$repo_root}"
+        printf '%s\n' "$hook_tpl" > "$tmp_apt_hook"
         chown root:root "$tmp_apt_hook"
         chmod 0644 "$tmp_apt_hook"
         if [ -f "$hook_file" ] && cmp -s "$tmp_apt_hook" "$hook_file"; then

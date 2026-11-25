@@ -91,8 +91,7 @@ function hst_mfp_normalize_domain(string $domain): string {
 
 /**
  * Parse /etc/hestiacp-mail-forward-policy.conf safely without shell evaluation.
- * If the config file does not exist, enforcement defaults to disabled.
- * If the file exists but cannot be read (e.g. 0600 permissions), fail closed with scope=user.
+ * If the config file does not exist or cannot be read, fail closed with scope=user.
  *
  * @return array{
  *   enabled: bool,
@@ -105,7 +104,7 @@ function hst_mfp_normalize_domain(string $domain): string {
  */
 function hst_mfp_load_config(?string $path = null): array {
 	$defaults = [
-		"enabled" => false,
+		"enabled" => true,
 		"scope" => "user",
 		"block_catchall" => true,
 		"enforce_api" => true,
@@ -165,7 +164,7 @@ function hst_mfp_load_config(?string $path = null): array {
 	}
 
 	$cfg = $defaults;
-	$cfg["enabled"] = isset($raw["ENABLED"]) ? hst_mfp_parse_bool($raw["ENABLED"], false) : true;
+	$cfg["enabled"] = isset($raw["ENABLED"]) ? hst_mfp_parse_bool($raw["ENABLED"], true) : true;
 
 	if (isset($raw["SCOPE"])) {
 		$scope = strtolower(trim($raw["SCOPE"]));
@@ -290,6 +289,26 @@ function hst_mfp_get_allowed_domains(string $target_user, array $cfg): array {
 	}
 
 	if (($cfg["scope"] ?? "user") === "server") {
+		$users = hst_mfp_exec_json("v-list-users json");
+		if (!empty($users)) {
+			foreach (array_keys($users) as $u) {
+				if (!is_string($u) || !preg_match('/^[a-zA-Z0-9._-]+$/', $u)) {
+					continue;
+				}
+				$domains = hst_mfp_exec_json("v-list-mail-domains " . escapeshellarg($u) . " json");
+				foreach ($domains as $dom => $meta) {
+					if (is_array($meta) && (($meta["SUSPENDED"] ?? "no") === "yes")) {
+						continue;
+					}
+					if (is_string($dom)) {
+						hst_mfp_add_domain_key($allowed, $dom);
+					}
+				}
+			}
+			return $allowed;
+		}
+
+		// Fallback if Hestia CLI returned empty user list: scan Exim domains directory.
 		$exim_dir = hst_mfp_exim_domains_dir();
 		if (is_dir($exim_dir) && is_readable($exim_dir)) {
 			$entries = @scandir($exim_dir);
@@ -301,24 +320,6 @@ function hst_mfp_get_allowed_domains(string $target_user, array $cfg): array {
 					if (is_dir($exim_dir . "/" . $entry)) {
 						hst_mfp_add_domain_key($allowed, $entry);
 					}
-				}
-			}
-			return $allowed;
-		}
-
-		// Fallback if Exim domains directory is absent: enumerate all HestiaCP users' mail domains.
-		$users = hst_mfp_exec_json("v-list-users json");
-		foreach (array_keys($users) as $u) {
-			if (!is_string($u) || !preg_match('/^[a-zA-Z0-9._-]+$/', $u)) {
-				continue;
-			}
-			$domains = hst_mfp_exec_json("v-list-mail-domains " . escapeshellarg($u) . " json");
-			foreach ($domains as $dom => $meta) {
-				if (is_array($meta) && (($meta["SUSPENDED"] ?? "no") === "yes")) {
-					continue;
-				}
-				if (is_string($dom)) {
-					hst_mfp_add_domain_key($allowed, $dom);
 				}
 			}
 		}
@@ -347,14 +348,30 @@ function hst_mfp_get_allowed_domains(string $target_user, array $cfg): array {
  * @param string[] $targets
  * @return string[]
  */
-function hst_mfp_find_blocked_targets(array $targets, string $target_user, array $cfg): array {
+function hst_mfp_find_blocked_targets(
+	array $targets,
+	string $target_user,
+	array $cfg,
+	bool $allow_blackhole = true,
+): array {
 	$allowed = hst_mfp_get_allowed_domains($target_user, $cfg);
 	$blocked = [];
 	$seen = [];
 
 	foreach ($targets as $target) {
 		$item = trim((string) $target);
-		if ($item === "" || strtolower($item) === ":blackhole:") {
+		if ($item === "") {
+			continue;
+		}
+		if (strtolower($item) === ":blackhole:") {
+			if ($allow_blackhole) {
+				continue;
+			}
+			$key = ":blackhole:";
+			if (!isset($seen[$key])) {
+				$seen[$key] = true;
+				$blocked[] = $item;
+			}
 			continue;
 		}
 		$domain = hst_mfp_extract_domain($item);
@@ -399,8 +416,8 @@ function hst_mfp_format_error(array $blocked, string $scope, string $context_lab
 
 	$action_label =
 		$context_label === "catchall"
-			? "External catch-all forwarding is disabled by server policy"
-			: "External mail forwarding is disabled by server policy";
+			? "External catch-all forwarding is disabled by server policy to protect server mail deliverability"
+			: "External mail forwarding is disabled by server policy to protect server mail deliverability";
 
 	$guidance =
 		"To read messages in Gmail, Outlook, or a mobile app, connect the mailbox via IMAP/SMTP instead of forwarding, or ask the server administrator to configure an exception.";
@@ -441,7 +458,8 @@ function hst_mfp_validate_web_forwards(
 	}
 
 	$clean_user = trim($target_user, "'\"");
-	$blocked = hst_mfp_find_blocked_targets($new_targets, $clean_user, $cfg);
+	$allow_blackhole = ($context_label !== "catchall");
+	$blocked = hst_mfp_find_blocked_targets($new_targets, $clean_user, $cfg, $allow_blackhole);
 	if (empty($blocked)) {
 		return null;
 	}
@@ -495,14 +513,23 @@ function hst_mfp_validate_api_command(
 		return null;
 	}
 
-	if (hst_mfp_is_user_admin($key_user)) {
+	$clean_user = trim($key_user, "'\"");
+	if ($clean_user === "" || $clean_user === "." || $clean_user === ".." || !preg_match('/^[a-zA-Z0-9._-]+$/', $clean_user)) {
+		return hst_mfp_format_error(["invalid user"], (string) $cfg["scope"], $context_label);
+	}
+
+	if (hst_mfp_is_user_admin($clean_user)) {
 		return null;
 	}
 
 	// web/api/index.php appends received arg1..arg13 sequentially with foreach($hst_cmd_args),
 	// so skipping arg4 and passing arg5 shifts arg5 into position 3 ($4 in shell).
-	// Validate by positional order across all trailing positional arguments and fail closed if missing.
+	// Validate by positional order across all trailing positional arguments, reject unexpected
+	// extra arguments, and fail closed if the target is missing.
 	$pos_args = array_values($args);
+	if (count($pos_args) > $target_start_index + 1) {
+		return hst_mfp_format_error(["unexpected trailing argument"], (string) $cfg["scope"], $context_label);
+	}
 	$candidates = array_slice($pos_args, $target_start_index);
 	$non_empty = [];
 	foreach ($candidates as $cand) {
@@ -515,7 +542,8 @@ function hst_mfp_validate_api_command(
 		return hst_mfp_format_error(["missing target"], (string) $cfg["scope"], $context_label);
 	}
 
-	$blocked = hst_mfp_find_blocked_targets($non_empty, $key_user, $cfg);
+	$allow_blackhole = ($context_label !== "catchall");
+	$blocked = hst_mfp_find_blocked_targets($non_empty, $clean_user, $cfg, $allow_blackhole);
 	if (empty($blocked)) {
 		return null;
 	}

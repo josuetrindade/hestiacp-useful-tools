@@ -2,7 +2,7 @@
 
 A curated collection of production-grade scripts, optimization guides, and **platform-agnostic AI prompt blueprints** for HestiaCP + Debian/Ubuntu servers.
 
-Built and battle-tested for real production environments. A contribution to the HestiaCP community — thank you to the team for your continuous work!
+Built and battle-tested for real production environments. A contribution to the HestiaCP community - thank you to the team for your continuous work!
 
 ---
 
@@ -20,16 +20,16 @@ Step-by-step guides to optimize your server infrastructure:
 
 ### 2. 🤖 AI Integration Blueprints (`/AI`)
 
-**Platform-agnostic** system prompt blueprints and knowledge bases to integrate LLMs with your HestiaCP server. No dependency on Dify, n8n, or any specific platform — inject these prompts directly into any LLM provider (OpenAI, Anthropic, Google, OpenRouter, etc.) via `systemPrompt`.
+**Platform-agnostic** system prompt blueprints and knowledge bases to integrate LLMs with your HestiaCP server. No dependency on Dify, n8n, or any specific platform - inject these prompts directly into any LLM provider (OpenAI, Anthropic, Google, OpenRouter, etc.) via `systemPrompt`.
 
 #### Cognitive Architecture (April 2026)
 
 The AI prompts in this repository follow a **3-module Cognitive OS** structure inspired by the [Nuwa.skill](https://github.com/alchaincyf/zhangxuefeng-skill) methodology and the [Agent Skills](https://github.com/anthropics/skills) standard:
 
 ```
-<decision_heuristics>  — Operational reasoning rules
-<expression_dna>       — Tone, syntax, and output format
-<internal_tensions>    — Ethical and technical constraints to force critical thinking
+<decision_heuristics>  - Operational reasoning rules
+<expression_dna>       - Tone, syntax, and output format
+<internal_tensions>    - Ethical and technical constraints to force critical thinking
 ```
 
 This structure shifts LLM agents from generic "helpful assistants" to **specialized cognitive profiles** with deterministic, institutional-grade behavior.
@@ -114,7 +114,7 @@ Automation and maintenance scripts to enhance HestiaCP's default capabilities.
 - **CrowdSec Collaborative IPS (`--crowdsec`):** Isolates CrowdSec LAPI on `127.0.0.1:8099` (zero port conflict with Apache `:8080`), dynamically detects the active `hestia.conf` stack (`Nginx-only` vs `Nginx+Apache2`, `VSFTPD`/`ProFTPD`, `Exim4`/`Postfix`/`Dovecot`, `MariaDB`/`PgSQL`, `Roundcube`), protects HestiaCP `:8083` + Multi-CMS logins (Drupal, Nextcloud, Laravel, PrestaShop, OpenCart, DokuWiki, MediaWiki, WordPress) + Nextcloud WebDAV sync whitelist (validated via `crowdsec -t`), runs `crowdsec-firewall-bouncer-nftables` immune to `v-update-firewall`, and **exempts the active SSH port from external blocklists** so admins on shared VPNs are never locked out of SSH.
 
 #### [Logrotate Optimizer (`v-optimize-logrotate`)](scripts/logrotate-optimize/)
-- Upgrades Apache & Nginx log rotation from the HestiaCP default (`weekly rotate 4`) to `daily rotate 14` — preventing domain logs from growing to 100MB+ during ad campaigns (Facebook/Instagram UTM params inflate each log line to ~630 bytes) or sustained brute-force attacks.
+- Upgrades Apache & Nginx log rotation from the HestiaCP default (`weekly rotate 4`) to `daily rotate 14` - preventing domain logs from growing to 100MB+ during ad campaigns (Facebook/Instagram UTM params inflate each log line to ~630 bytes) or sustained brute-force attacks.
 - Safe and persistent across HestiaCP updates. Backs up original configs and validates before applying.
 
 #### [Fail2Ban Email Optimizer (`v-optimize-fail2ban`)](scripts/fail2ban-optimize/)
@@ -150,10 +150,10 @@ cd /root/hestiacp-useful-tools
 ### Step 2: Run the installer
 
 ```bash
-# Interactive mode (recommended — lets you choose standard vs full install with CrowdSec + Crons):
+# Interactive mode (recommended - lets you choose standard vs full install with CrowdSec + Crons):
 bash install.sh
 
-# — OR Non-Interactive CLI Flags —
+# - OR Non-Interactive CLI Flags -
 bash install.sh --all                    # Install all modules + CrowdSec IPS + Automated Cron Jobs
 bash install.sh --setup-crons            # Configure recommended cron schedules only
 bash install.sh --harden                 # Run only the 5-pillar Server Hardening module
@@ -192,22 +192,22 @@ ls -la /backup/
 
 ### Optional: Add Remote Backups (B2, FTP, SFTP)
 
-Want your backups also sent to the cloud? HestiaCP handles this natively — just run **one** command:
+Want your backups also sent to the cloud? HestiaCP handles this natively - just run **one** command:
 
 ```bash
-# Backblaze B2 (cheapest cloud option — ~$0.005/GB/month)
+# Backblaze B2 (cheapest cloud option - ~$0.005/GB/month)
 # 1. Create account at https://www.backblaze.com
 # 2. Create a bucket (B2 Cloud Storage → Create a Bucket)
 # 3. Create an Application Key (App Keys → Add a New Application Key)
 # 4. Run:
 v-add-backup-host b2 YOUR_BUCKET_NAME YOUR_KEY_ID YOUR_APP_KEY
 
-# — OR —
+# - OR -
 
 # SFTP (any server with SSH access)
 v-add-backup-host sftp backup.example.com username password
 
-# — OR —
+# - OR -
 
 # FTP
 v-add-backup-host ftp ftp.example.com username password
@@ -228,7 +228,7 @@ After this, every backup created by our tool is automatically uploaded to your c
 ```bash
 cd /root/hestiacp-useful-tools
 git pull
-bash install.sh    # safe to re-run — configs are never overwritten
+bash install.sh    # safe to re-run - configs are never overwritten
 ```
 
 ### Installing a single tool

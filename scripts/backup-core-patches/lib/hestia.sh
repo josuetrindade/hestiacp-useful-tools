@@ -28,8 +28,8 @@ patch_b2_functions() {
     fi
 
     local temp repl_file
-    temp=$(mktemp /run/patch-b2-v5.XXXXXX) || return 1
-    repl_file=$(mktemp /run/patch-b2-v5-body.XXXXXX) || { rm -f "$temp"; return 1; }
+    temp=$(umask 077 && mktemp /run/patch-b2-v5.XXXXXX) || return 1
+    repl_file=$(umask 077 && mktemp /run/patch-b2-v5-body.XXXXXX) || { rm -f "$temp"; return 1; }
     chmod 600 "$temp" "$repl_file"
 
     cat > "$repl_file" << 'PATCH_EOF'
@@ -246,7 +246,7 @@ patch_v_backup_user() {
 
     [ ! -f "${script}.original" ] && cp "$script" "${script}.original" 2>/dev/null
 
-    local temp=$(mktemp /run/patch-backup-user.XXXXXX)
+    local temp=$(umask 077 && mktemp /run/patch-backup-user.XXXXXX)
     local line_num=$(grep -n 'log_event "$OK" "$ARGUMENTS"' "$script" | cut -d: -f1 | head -1)
 
     if [ -n "$line_num" ]; then
@@ -326,7 +326,7 @@ patch_v_backup_user_db_repair() {
         cp "$script" "${script}.original" 2>/dev/null || true
     fi
 
-    local temp=$(mktemp /run/patch-db-repair.XXXXXX)
+    local temp=$(umask 077 && mktemp /run/patch-db-repair.XXXXXX)
     local line_num=$(grep -n 'case $TYPE in' "$script" | cut -d: -f1 | head -1)
 
     if [ -n "$line_num" ]; then
@@ -368,7 +368,7 @@ patch_v_backup_users_interactive() {
         cp "$script" "${script}.original" 2>/dev/null || true
     fi
 
-    local temp=$(mktemp /run/patch-interactive.XXXXXX)
+    local temp=$(umask 077 && mktemp /run/patch-interactive.XXXXXX)
     local line_num=$(grep -n 'nice -n 19 ionice -c2 -n7 $BIN/v-backup-user $user >> $log' "$script" | cut -d: -f1 | head -1)
 
     if [ -n "$line_num" ]; then
@@ -399,7 +399,7 @@ patch_v_backup_user_notify() {
     [ ! -f "$script" ] && return 1
     grep -q "hestia-custom-notify-hook" "$script" 2>/dev/null && return 0
 
-    local temp=$(mktemp /run/patch-notify.XXXXXX)
+    local temp=$(umask 077 && mktemp /run/patch-notify.XXXXXX)
     local line_num=$(grep -n '\$SENDMAIL -s "$subj" "$email" "$notify"' "$script" | cut -d: -f1 | head -1)
 
     if [ -n "$line_num" ]; then
@@ -430,7 +430,7 @@ patch_v_backup_users_notify() {
     [ ! -f "$script" ] && return 1
     grep -q "hestia-custom-notify-global-hook" "$script" 2>/dev/null && return 0
 
-    local temp=$(mktemp /run/patch-global-notify.XXXXXX)
+    local temp=$(umask 077 && mktemp /run/patch-global-notify.XXXXXX)
     local line_num=$(grep -n '^exit' "$script" | tail -1 | cut -d: -f1)
 
     if [ -n "$line_num" ]; then
@@ -464,7 +464,7 @@ patch_v_backup_users_retention() {
 
     [ ! -f "${script}.original" ] && cp "$script" "${script}.original" 2>/dev/null
 
-    local temp=$(mktemp /run/patch-retention-hook.XXXXXX)
+    local temp=$(umask 077 && mktemp /run/patch-retention-hook.XXXXXX)
     local line_num=$(grep -n '^exit' "$script" | tail -1 | cut -d: -f1)
 
     if [ -n "$line_num" ]; then
@@ -654,7 +654,7 @@ DEL_PHP_EOF
     if [ -f "$tpl_bk" ] && ! grep -q "toolbar-sorting" "$tpl_bk" 2>/dev/null; then
         cp -f "$tpl_bk" "${tpl_bk}.original" 2>/dev/null || true
         local temp_bk
-        temp_bk=$(mktemp /run/patch-bk-sort.XXXXXX) || return 1
+        temp_bk=$(umask 077 && mktemp /run/patch-bk-sort.XXXXXX) || return 1
         awk '
             /<div class="toolbar-right">/ {
                 print
@@ -713,7 +713,7 @@ DEL_PHP_EOF
     if [ -f "$tpl_files" ] && ! grep -q "toolbar-sorting" "$tpl_files" 2>/dev/null; then
         cp -f "$tpl_files" "${tpl_files}.original" 2>/dev/null || true
         local temp_fl
-        temp_fl=$(mktemp /run/patch-fl-sort.XXXXXX) || return 1
+        temp_fl=$(umask 077 && mktemp /run/patch-fl-sort.XXXXXX) || return 1
         awk '
             /<div class="toolbar-right">/ {
                 print
@@ -909,7 +909,7 @@ INC_CTRL_EOF
     if [ -f "$panel_tpl" ] && ! grep -q "U_BACKUPS_INCREMENTAL" "$panel_tpl" 2>/dev/null; then
         cp -f "$panel_tpl" "${panel_tpl}.original" 2>/dev/null || true
         local temp_pnl
-        temp_pnl=$(mktemp /run/patch-panel.XXXXXX) || return 1
+        temp_pnl=$(umask 077 && mktemp /run/patch-panel.XXXXXX) || return 1
         awk '
             /href="\/list\/backup\/"/ {
                 sub(/\$panel\[\$user\]\["BACKUPS"\] \?>"/, "$panel[$user][\"BACKUPS\"] ?><?php if ($panel[$user][\"BACKUPS_INCREMENTAL\"] == \"yes\") { ?>\\&#13;<?= _(\"Snapshots\") ?>: <?= $panel[$user][\"U_BACKUPS_INCREMENTAL\"] ?? 0 ?><?php } ?>\"")

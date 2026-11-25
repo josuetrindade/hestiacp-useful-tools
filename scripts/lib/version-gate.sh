@@ -10,7 +10,7 @@ hestia_detected_version() {
     local hestia_root="${HESTIA:-/usr/local/hestia}"
     local conf="${hestia_root}/conf/hestia.conf"
     [ -f "$conf" ] || return 0
-    sed -n "s/^VERSION=['\"]\?\([^'\"]*\)['\"]\?/\1/p" "$conf" 2>/dev/null | head -n1
+    sed -n "s/^VERSION=['\"]\?\([^'\"[:space:]#]*\)['\"]\?.*$/\1/p" "$conf" 2>/dev/null | head -n1
 }
 
 # Arguments:
@@ -29,9 +29,17 @@ check_hestia_core_patch_compatibility() {
     local log_file="${HESTIA_TOOLS_VERSION_LOG:-$state_dir/custom-patches-version.log}"
     local detected=""
 
-    if [ -f "$tools_conf" ]; then
-        # shellcheck disable=SC1090
-        source "$tools_conf" 2>/dev/null || true
+    if [ -f "$tools_conf" ] && [ ! -L "$tools_conf" ] && [ -O "$tools_conf" ]; then
+        local tc_mode
+        tc_mode="$(stat -c '%a' "$tools_conf" 2>/dev/null || echo '777')"
+        if [[ ! "$tc_mode" =~ [2367].$ && ! "$tc_mode" =~ [2367]$ ]]; then
+            # shellcheck disable=SC1090
+            source "$tools_conf" 2>/dev/null || true
+        else
+            echo "  -> [WARN] Ignored writable tools config: $tools_conf (mode=$tc_mode)" >&2
+        fi
+    elif [ -e "$tools_conf" ] || [ -L "$tools_conf" ]; then
+        echo "  -> [WARN] Ignored unsafe tools config (symlink or non-root owner): $tools_conf" >&2
     fi
 
     detected="$(hestia_detected_version)"
@@ -50,13 +58,15 @@ check_hestia_core_patch_compatibility() {
         local warn_msg="[WARN] HestiaCP version '${detected:-unknown}' is not yet verified for core file patches (supported: ${SUPPORTED_HESTIA_VERSION}). Skipping core file mutations; standalone tools remain active."
         echo "  -> $warn_msg" >&2
 
-        if (umask 077 && mkdir -p "$state_dir") 2>/dev/null && [ -w "$state_dir" ]; then
-            printf '%s %s\n' "$(date '+%F %T' 2>/dev/null || echo 'now')" "$warn_msg" >> "$log_file" 2>/dev/null || true
-            chmod 0600 "$log_file" 2>/dev/null || true
+        if (umask 077 && mkdir -p "$state_dir") 2>/dev/null && [ ! -L "$state_dir" ] && [ -w "$state_dir" ]; then
+            if [ ! -L "$log_file" ]; then
+                (umask 077 && printf '%s %s\n' "$(date '+%F %T' 2>/dev/null || echo 'now')" "$warn_msg" >> "$log_file") 2>/dev/null || true
+                chmod 0600 "$log_file" 2>/dev/null || true
+            fi
 
             local prev_held=""
-            [ -f "$state_file" ] && prev_held="$(sed -n 's/^held_version=//p' "$state_file" 2>/dev/null | head -n1)"
-            if [ "$prev_held" != "${detected:-unknown}" ]; then
+            [ -f "$state_file" ] && [ ! -L "$state_file" ] && prev_held="$(sed -n 's/^held_version=//p' "$state_file" 2>/dev/null | head -n1)"
+            if [ "$prev_held" != "${detected:-unknown}" ] && [ ! -L "$state_file" ]; then
                 (umask 077 && printf 'held_version=%s\nsupported_version=%s\nheld_at=%s\n' "${detected:-unknown}" "$SUPPORTED_HESTIA_VERSION" "$(date -u '+%FT%TZ' 2>/dev/null || echo 'unknown')" > "$state_file") 2>/dev/null || true
                 chmod 0600 "$state_file" 2>/dev/null || true
 

@@ -429,7 +429,6 @@ This list reflects the verified binaries in `/usr/local/hestia/bin/`.
 - `v-restore-mail-domain-restic`: Restore mail (restic).
 - `v-restore-user`: Restore user.
 - `v-restore-user-full-restic`: Full restore (restic).
-- `v-restore-user.original`: Backup script.
 - `v-restore-user-restic`: User restore (restic).
 - `v-restore-web-domain`: Restore web.
 - `v-restore-web-domain-restic`: Restore web (restic).

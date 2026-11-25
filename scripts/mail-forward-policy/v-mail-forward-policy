@@ -153,14 +153,18 @@ if ($tag === "web_add_mail_index.php") {
 	if (empty($_SESSION["error_msg"]) && empty($_POST["v_blackhole"]) && isset($_POST["v_fwd"])) {
 		if (!is_string($_POST["v_fwd"])) {
 			$_SESSION["error_msg"] = _("Invalid mail forwarding input.");
-		} elseif ($_POST["v_fwd"] !== "" && is_file(dirname(__DIR__, 2) . "/inc/mail_forward_policy.php")) {
-			require_once dirname(__DIR__, 2) . "/inc/mail_forward_policy.php";
-			$mfp_targets = hst_mfp_parse_targets($_POST["v_fwd"]);
-			$mfp_error = hst_mfp_validate_web_forwards($mfp_targets, trim((string) $user, "'\''\""), "forward");
-			if ($mfp_error !== null) {
-				$_SESSION["error_msg"] = $mfp_error;
+		} elseif ($_POST["v_fwd"] !== "") {
+			if (!is_file(dirname(__DIR__, 2) . "/inc/mail_forward_policy.php")) {
+				$_SESSION["error_msg"] = _("Mail forwarding policy module is unavailable. Please contact the server administrator.");
+			} else {
+				require_once dirname(__DIR__, 2) . "/inc/mail_forward_policy.php";
+				$mfp_targets = hst_mfp_parse_targets($_POST["v_fwd"]);
+				$mfp_error = hst_mfp_validate_web_forwards($mfp_targets, trim((string) $user, "'\''\""), "forward");
+				if ($mfp_error !== null) {
+					$_SESSION["error_msg"] = $mfp_error;
+				}
+				unset($mfp_targets, $mfp_error);
 			}
-			unset($mfp_targets, $mfp_error);
 		}
 	}
 	// [hestia-mail-forward-policy-v1-add-end]
@@ -186,13 +190,17 @@ PHP;
 		} else {
 			$mfp_curr_ca = trim((string) ($data[$v_domain]["CATCHALL"] ?? ($v_catchall ?? "")));
 			$mfp_post_ca = trim($_POST["v_catchall"]);
-			if ($mfp_post_ca !== "" && $mfp_post_ca !== $mfp_curr_ca && is_file(dirname(__DIR__, 2) . "/inc/mail_forward_policy.php")) {
-				require_once dirname(__DIR__, 2) . "/inc/mail_forward_policy.php";
-				$mfp_error = hst_mfp_validate_web_forwards([$mfp_post_ca], trim((string) $user, "'\''\""), "catchall");
-				if ($mfp_error !== null) {
-					$_SESSION["error_msg"] = $mfp_error;
+			if ($mfp_post_ca !== "" && $mfp_post_ca !== $mfp_curr_ca) {
+				if (!is_file(dirname(__DIR__, 2) . "/inc/mail_forward_policy.php")) {
+					$_SESSION["error_msg"] = _("Mail forwarding policy module is unavailable. Please contact the server administrator.");
+				} else {
+					require_once dirname(__DIR__, 2) . "/inc/mail_forward_policy.php";
+					$mfp_error = hst_mfp_validate_web_forwards([$mfp_post_ca], trim((string) $user, "'\''\""), "catchall");
+					if ($mfp_error !== null) {
+						$_SESSION["error_msg"] = $mfp_error;
+					}
+					unset($mfp_error);
 				}
-				unset($mfp_error);
 			}
 			unset($mfp_curr_ca, $mfp_post_ca);
 		}
@@ -205,7 +213,9 @@ PHP;
 	if (empty($_SESSION["error_msg"]) && empty($_POST["v_blackhole"]) && isset($_POST["v_fwd"])) {
 		if (!is_string($_POST["v_fwd"])) {
 			$_SESSION["error_msg"] = _("Invalid mail forwarding input.");
-		} elseif (is_file(dirname(__DIR__, 2) . "/inc/mail_forward_policy.php")) {
+		} elseif (!is_file(dirname(__DIR__, 2) . "/inc/mail_forward_policy.php")) {
+			$_SESSION["error_msg"] = _("Mail forwarding policy module is unavailable. Please contact the server administrator.");
+		} else {
 			require_once dirname(__DIR__, 2) . "/inc/mail_forward_policy.php";
 			$mfp_acc_key = is_string($v_account ?? null) ? $v_account : "";
 			$mfp_acc_data = $data[$mfp_acc_key] ?? ($data[strtolower($mfp_acc_key)] ?? []);
@@ -245,7 +255,10 @@ PHP;
     }
     $snippet = <<<'\''PHP'\''
 	// [hestia-mail-forward-policy-v1-api-start]
-	if ($key_user != $root_user && is_file(dirname(__DIR__) . "/inc/mail_forward_policy.php")) {
+	if ($key_user != $root_user && in_array($hst_cmd, ["v-add-mail-account-forward", "v-add-mail-domain-catchall", "v-change-mail-domain-catchall"], true)) {
+		if (!is_file(dirname(__DIR__) . "/inc/mail_forward_policy.php")) {
+			api_error(E_FORBIDDEN, "Mail forwarding policy module is unavailable", $hst_return, true, (string) $key_user);
+		}
 		require_once dirname(__DIR__) . "/inc/mail_forward_policy.php";
 		$mfp_api_error = hst_mfp_validate_api_command($hst_cmd, $hst_cmd_args, (string) $key_user, (string) $root_user);
 		if ($mfp_api_error !== null) {
@@ -451,7 +464,7 @@ function safe_read_tenant_file(string $path, string $user_home, int $max_bytes =
     if ($real_home === false || $real_file === false) {
         return null;
     }
-    $real_home_slash = rtrim($real_home, "/") . "/";
+    $real_home_slash = rtrim($real_home, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR;
     if (!str_starts_with($real_file, $real_home_slash)) {
         return null;
     }
@@ -653,7 +666,7 @@ cmd_check() {
 define("HESTIA_MFP_TEST_MODE", true);
 define("HESTIA_MFP_CONF", $argv[1]);
 define("HESTIA_MFP_EXIM_DOMAINS_DIR", $argv[3]);
-define("HESTIA_MFP_CMD_PREFIX", "");
+define("HESTIA_MFP_CMD_PREFIX", rtrim($argv[2], "/") . "/bin/");
 require_once $argv[4];
 
 $hestia = rtrim($argv[2], "/");

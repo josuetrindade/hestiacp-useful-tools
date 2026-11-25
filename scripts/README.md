@@ -38,7 +38,7 @@ Upgrades Apache & Nginx log rotation from weekly to daily (14 days compressed). 
 Balances Dovecot & Exim Fail2Ban thresholds (`2h` ban after `5` attempts via `.local` precedence) so clients and Gmail POP3 fetchers are not locked out for 7 days on accidental typos.
 
 ### 10. [server-hardening](./server-hardening/)
-**🛡️ Recommended Tool:** Automates 6 upgrade-safe & crash-safe HestiaCP hardening pillars — Kernel sysctl, APT config preservation, lockout-safe SSH, Dual-Stack IPv6 Firewall Mirror (`nftables`), Web/Roundcube Fail2Ban filters + desync auto-healer, and **CrowdSec Collaborative IPS** (isolated on `127.0.0.1:8099`, auto-detecting `hestia.conf` stack + Multi-CMS & Nextcloud sync protection + SSH anti-lockout).
+**🛡️ Recommended Tool:** Automates 6 upgrade-safe & crash-safe HestiaCP hardening pillars - Kernel sysctl, APT config preservation, lockout-safe SSH, Dual-Stack IPv6 Firewall Mirror (`nftables`), Web/Roundcube Fail2Ban filters + desync auto-healer, and **CrowdSec Collaborative IPS** (isolated on `127.0.0.1:8099`, auto-detecting `hestia.conf` stack + Multi-CMS & Nextcloud sync protection + SSH anti-lockout).
 
 ### 11. [nginx-txt-nocache](./nginx-txt-nocache/)
 Removes `.txt` from Nginx static `expires max` blocks across PHP-FPM templates, active domain configs, and reverse-proxy `PROXY_EXT` definitions so `robots.txt`, `llms.txt`, `ads.txt`, and `security.txt` always serve fresh content without 1-year browser/CDN caching.

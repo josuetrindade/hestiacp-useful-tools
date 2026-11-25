@@ -20,6 +20,14 @@ for arg in "$@"; do
     case "$arg" in
         --allow-untested-hestia) export ALLOW_UNTESTED_HESTIA=1 ;;
         --apt-hook)              export HESTIA_APT_HOOK=1 ;;
+        --help|-h)
+            echo "Usage: $0 [--allow-untested-hestia] [--apt-hook]"
+            exit 0
+            ;;
+        *)
+            echo "ERROR: Unknown option: $arg" >&2
+            exit 1
+            ;;
     esac
 done
 
@@ -43,7 +51,7 @@ if [ -L "$HESTIA_BIN/v-backup-users-custom" ] || [ -f "$HESTIA_BIN/v-backup-user
     rm -f "/etc/hestiacp-backup-custom.conf"
     echo "  -> Cleaned up old v-backup-users-custom wrapper (Arch v1)."
 fi
-if [ -d "$HESTIA_BIN/lib" ] && [ -f "$HESTIA_BIN/lib/core.sh" ] && [ -f "$HESTIA_BIN/lib/retention.sh" ] && [ -f "$HESTIA_BIN/lib/remote.sh" ]; then
+if [ ! -L "$HESTIA_BIN/lib" ] && [ -d "$HESTIA_BIN/lib" ] && [ -f "$HESTIA_BIN/lib/core.sh" ] && [ -f "$HESTIA_BIN/lib/retention.sh" ] && [ -f "$HESTIA_BIN/lib/remote.sh" ]; then
     rm -rf "$HESTIA_BIN/lib"
     echo "  -> Cleaned up orphaned Arch v1 backup library ($HESTIA_BIN/lib)."
 fi
@@ -83,8 +91,9 @@ echo "  -> Installed Restic incremental & Master Key manager: v-restic-manager"
 
 # 2.3 Isolate Backblaze B2 StaticX runtime extraction outside world-writable /tmp
 install -d -m 0700 -o root -g root /var/cache/b2-staticx 2>/dev/null || true
-if [ -x /usr/local/bin/b2 ] && [ -d /usr/local/sbin ]; then
-    cat > /usr/local/sbin/b2 << 'B2_SHIM_EOF'
+if [ -x /usr/local/bin/b2 ] && [ -d /usr/local/sbin ] && [ ! -L /usr/local/sbin ]; then
+    tmp_b2_shim="$(umask 022 && mktemp /usr/local/sbin/.b2-shim.XXXXXX)"
+    cat > "$tmp_b2_shim" << 'B2_SHIM_EOF'
 #!/usr/bin/env bash
 # Managed by hestiacp-useful-tools: isolate Backblaze B2 StaticX extraction from /tmp
 _b2_tmp="${TMPDIR:-/tmp}"
@@ -93,8 +102,9 @@ if [ "$(id -u)" -eq 0 ] && install -d -m 0700 -o root -g root /var/cache/b2-stat
 fi
 TMPDIR="$_b2_tmp" exec /usr/local/bin/b2 "$@"
 B2_SHIM_EOF
-    chown root:root /usr/local/sbin/b2
-    chmod 0755 /usr/local/sbin/b2
+    chown root:root "$tmp_b2_shim"
+    chmod 0755 "$tmp_b2_shim"
+    mv -f "$tmp_b2_shim" /usr/local/sbin/b2
     echo "  -> Installed B2 StaticX TMPDIR isolation shim: /usr/local/sbin/b2 -> /var/cache/b2-staticx"
 fi
 

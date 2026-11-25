@@ -1,6 +1,6 @@
-# HestiaCP Custom Tools — Extended Reference
+# HestiaCP Custom Tools - Extended Reference
 
-This document covers custom tools from `hestiacp-useful-tools` that are deployed alongside HestiaCP but are NOT yet included in `01-hestia-system-paths.md` §9. These tools should be registered with `v-log-action` and installed via symlink to `/usr/local/hestia/bin/`.
+This document covers custom tools from `hestiacp-useful-tools` that are deployed alongside HestiaCP but are NOT yet included in `01-hestia-system-paths.md` §9. These tools should be registered with `v-log-action` and installed as root-owned (`0755 root:root`) binaries in `/usr/local/hestia/bin/`.
 
 ## v-fix-web-permissions
 
@@ -8,7 +8,7 @@ Resets file ownership and permissions to HestiaCP defaults for all or specific d
 
 | Component | Path | Description |
 | :--- | :--- | :--- |
-| **Script** | `/usr/local/hestia/bin/v-fix-web-permissions` | Symlink to repo script |
+| **Script** | `/usr/local/hestia/bin/v-fix-web-permissions` | Installed CLI binary (`0755 root:root`) |
 | **Source** | `/root/hestiacp-useful-tools/scripts/fix-web-permissions/v-fix-web-permissions` | Repo source |
 | **Log Dir** | `/var/log/hestia/fix-permissions/` | Change logs per execution |
 | **Sentinel** | `/home/[USER]/web/[DOMAIN]/public_html/.no-fix-permissions` | Skip domain (custom perms) |
@@ -61,7 +61,7 @@ Comprehensive security auditing tool. Performs read-only scans across 4 layers: 
 
 | Component | Path | Description |
 | :--- | :--- | :--- |
-| **Script** | `/usr/local/hestia/bin/v-security-audit` | Symlink to repo script |
+| **Script** | `/usr/local/hestia/bin/v-security-audit` | Installed CLI binary (`0755 root:root`) |
 | **Source** | `/root/hestiacp-useful-tools/scripts/security-audit/v-security-audit` | Repo source |
 | **Lib Dir** | `/root/hestiacp-useful-tools/scripts/security-audit/lib/` | Modular check libraries |
 | **Log Dir** | `/var/log/hestia/security-audit/` | Execution logs |
@@ -114,17 +114,17 @@ v-security-audit --all --email                      # Email report to admin
 ### Key Paths Referenced
 
 All paths align with `01-hestia-system-paths.md`:
-- `/usr/local/hestia/conf/hestia.conf` — panel config
-- `/usr/local/hestia/data/users/` — user database
-- `/usr/local/hestia/data/firewall/` — firewall rules
-- `/usr/local/hestia/data/keys/` — API access keys
-- `/usr/local/hestia/data/sessions/` — panel sessions
-- `/usr/local/hestia/ssl/certificate.crt` — panel SSL cert
-- `/etc/php/[VER]/fpm/pool.d/` — PHP-FPM pools
-- `/etc/nginx/nginx.conf` — Nginx global config
-- `/etc/ssh/sshd_config` — SSH configuration
-- `/home/[USER]/web/[DOMAIN]/public_html/` — document roots
-- `/home/[USER]/conf/web/` — per-user web configs
+- `/usr/local/hestia/conf/hestia.conf` - panel config
+- `/usr/local/hestia/data/users/` - user database
+- `/usr/local/hestia/data/firewall/` - firewall rules
+- `/usr/local/hestia/data/keys/` - API access keys
+- `/usr/local/hestia/data/sessions/` - panel sessions
+- `/usr/local/hestia/ssl/certificate.crt` - panel SSL cert
+- `/etc/php/[VER]/fpm/pool.d/` - PHP-FPM pools
+- `/etc/nginx/nginx.conf` - Nginx global config
+- `/etc/ssh/sshd_config` - SSH configuration
+- `/home/[USER]/web/[DOMAIN]/public_html/` - document roots
+- `/home/[USER]/conf/web/` - per-user web configs
 
 ---
 
@@ -134,7 +134,7 @@ All paths align with `01-hestia-system-paths.md`:
 
 | Component | Path | Description |
 | :--- | :--- | :--- |
-| **Script** | `/usr/local/hestia/bin/v-harden-server` | Symlink to repo script |
+| **Script** | `/usr/local/hestia/bin/v-harden-server` | Installed CLI binary (`0755 root:root`) |
 | **Source** | `/root/hestiacp-useful-tools/scripts/server-hardening/v-harden-server` | Repo source |
 | **Log File** | `/var/log/hestia/server-hardening.log` | Hardening & heal execution log |
 | **Sysctl Config** | `/etc/sysctl.d/99-hestiacp-hardening.conf` | Kernel & network hardening |
@@ -157,7 +157,7 @@ Clones or updates configured Git repositories into user `/home/<user>/git/<repo>
 
 | Component | Path | Description |
 | :--- | :--- | :--- |
-| **Script** | `/usr/local/hestia/bin/v-github-mirror` | Symlink to repo script |
+| **Script** | `/usr/local/hestia/bin/v-github-mirror` | Installed CLI binary (`0755 root:root`) |
 | **Config** | `/etc/hestiacp-github-mirror.conf` | Mirror definitions (`0600 root:root`) |
 | **Read-Only Token** | `/etc/hestiacp-github-mirror.token` | Fine-Grained Read-Only PAT (`0400`/`0600 root:root`) |
 | **Staging Dir** | `/var/lib/hestiacp-github-mirror` | Temporary `root`-owned bare staging directory (`0711`) |

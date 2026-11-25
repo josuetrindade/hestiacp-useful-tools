@@ -68,6 +68,17 @@ install_root_file() {
     install -o root -g root -m "$mode" "$src" "$dst"
 }
 
+if [ -L "$CONF_FILE" ]; then
+    echo "ERROR: Refusing symlink config file: $CONF_FILE" >&2
+    exit 1
+fi
+
+NATIVE_MFP=0
+if [ -f "$HESTIA/web/inc/mail_forward_policy.php" ] && [ ! -L "$HESTIA/web/inc/mail_forward_policy.php" ] && \
+   grep -q "hst_validate_mail_forward_policy" "$HESTIA/web/inc/mail_forward_policy.php" 2>/dev/null; then
+    NATIVE_MFP=1
+fi
+
 install_root_file 0755 "$SCRIPT_DIR/v-mail-forward-policy" "$HESTIA_BIN/v-mail-forward-policy"
 echo "  -> [OK] Installed CLI script: $HESTIA_BIN/v-mail-forward-policy"
 
@@ -80,17 +91,27 @@ else
     echo "  -> [INFO] Configuration already exists (preserved): $CONF_FILE"
 fi
 
-install_root_file 0644 "$SCRIPT_DIR/inc/mail_forward_policy.php" "$HESTIA/web/inc/mail_forward_policy.php"
-echo "  -> [OK] Installed web policy helper: $HESTIA/web/inc/mail_forward_policy.php"
+if [ "$NATIVE_MFP" -eq 1 ]; then
+    if [ -f "$HESTIA/web/js/custom_scripts/mail-forward-policy-ui.php" ] || [ -L "$HESTIA/web/js/custom_scripts/mail-forward-policy-ui.php" ]; then
+        rm -f "$HESTIA/web/js/custom_scripts/mail-forward-policy-ui.php"
+        echo "  -> [OK] Removed obsolete toolkit UI hint script (native policy active)"
+    fi
+    if grep -qE '^ENABLED=["'\'']?(yes|true|1|on)' "$CONF_FILE" 2>/dev/null && \
+       ! grep -qE '^POLICY_USER_EXTERNAL_MAIL_FORWARD=["'\'']?(server|user|no)' "$HESTIA/conf/hestia.conf" 2>/dev/null; then
+        echo "  -> [WARN] Native HestiaCP mail forward policy detected; migrate ENABLED=yes via: v-change-sys-config-value POLICY_USER_EXTERNAL_MAIL_FORWARD user"
+    fi
+    echo "  -> [INFO] Native HestiaCP policy module detected in $HESTIA/web/inc/mail_forward_policy.php; skipping toolkit PHP/hook mutations"
+elif [ "$CORE_PATCH_GATE_RC" -eq 0 ]; then
+    install_root_file 0644 "$SCRIPT_DIR/inc/mail_forward_policy.php" "$HESTIA/web/inc/mail_forward_policy.php"
+    echo "  -> [OK] Installed web policy helper: $HESTIA/web/inc/mail_forward_policy.php"
 
-install_root_file 0644 "$SCRIPT_DIR/custom_scripts/mail-forward-policy-ui.php" "$HESTIA/web/js/custom_scripts/mail-forward-policy-ui.php"
-echo "  -> [OK] Installed UI hint script: $HESTIA/web/js/custom_scripts/mail-forward-policy-ui.php"
+    install_root_file 0644 "$SCRIPT_DIR/custom_scripts/mail-forward-policy-ui.php" "$HESTIA/web/js/custom_scripts/mail-forward-policy-ui.php"
+    echo "  -> [OK] Installed UI hint script: $HESTIA/web/js/custom_scripts/mail-forward-policy-ui.php"
 
-if [ "$CORE_PATCH_GATE_RC" -eq 0 ]; then
     "$HESTIA_BIN/v-mail-forward-policy" --apply
     echo "  -> [OK] Applied web/API forward policy guards"
 else
-    echo "  -> [INFO] Skipped core PHP hook mutations (version gate held); standalone CLI/helper updated"
+    echo "  -> [INFO] Skipped core PHP helper/UI and hook mutations (version gate held); standalone CLI updated"
 fi
 
 APT_HOOK_LIB="$SCRIPT_DIR/../lib/apt-hook.sh"

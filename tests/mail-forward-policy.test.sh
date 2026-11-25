@@ -201,6 +201,10 @@ case "$u" in
     *)     echo '{}' ;;
 esac
 EOF
+cat > "$MOCK_BIN/v-list-users" << 'EOF'
+#!/bin/bash
+echo '{"admin": {}, "user1": {}, "user2": {}}'
+EOF
 cat > "$MOCK_BIN/v-list-user" << 'EOF'
 #!/bin/bash
 u="$1"
@@ -209,7 +213,9 @@ case "$u" in
     *)              echo "{\"$u\": {\"ROLE\": \"user\"}}" ;;
 esac
 EOF
-chmod +x "$MOCK_BIN/v-list-mail-domains" "$MOCK_BIN/v-list-user"
+chmod +x "$MOCK_BIN/v-list-mail-domains" "$MOCK_BIN/v-list-users" "$MOCK_BIN/v-list-user"
+
+mkdir -p "$EXIM_FIX/susp.example"
 
 php_test_out=$(php -r '
 define("HESTIA_DIR_BIN", $argv[1] . "/");
@@ -269,30 +275,47 @@ assert_case("non-allowlisted external blocked", hst_mfp_validate_web_forwards(["
 putenv("HESTIA_MFP_CONF=$conf_nobh");
 assert_case("block_catchall=no allows catchall", hst_mfp_validate_web_forwards(["boss@gmail.com"], "user1", "catchall"), true);
 
-// F) Existing admin-set external forward preserved when unchanged/removed, blocked only on new external
+// F) Existing admin-set external forward preserved only when exact, blocked on case variant or new external
 putenv("HESTIA_MFP_CONF=$conf_user");
 $existing = ["vip@gmail.com", "local@user1.example"];
-$posted_keep = hst_mfp_parse_targets("VIP@GMAIL.COM\nlocal@user1.example");
-$added_keep = array_values(array_udiff($posted_keep, $existing, "strcasecmp"));
+$posted_keep = hst_mfp_parse_targets("vip@gmail.com\nlocal@user1.example");
+$added_keep = array_values(array_diff($posted_keep, $existing));
 assert_case("keeping existing external fwd allowed", hst_mfp_validate_web_forwards($added_keep, "user1", "forward"), true);
+$posted_case = hst_mfp_parse_targets("VIP@GMAIL.COM\nlocal@user1.example");
+$added_case = array_values(array_diff($posted_case, $existing));
+assert_case("case-variant on existing external fwd blocked", hst_mfp_validate_web_forwards($added_case, "user1", "forward"), false);
 $posted_add = hst_mfp_parse_targets("vip@gmail.com, another@gmail.com");
-$added_new = array_values(array_udiff($posted_add, $existing, "strcasecmp"));
+$added_new = array_values(array_diff($posted_add, $existing));
 assert_case("adding extra external fwd blocked", hst_mfp_validate_web_forwards($added_new, "user1", "forward"), false);
 
-// G) API command checks (including Red-Team #1 positional gap-shift bypass & fail-closed)
+// G) API command checks (including positional gap-shift, invalid user, extra FORCE arg & fail-closed)
 assert_case("API external fwd blocked for user1", hst_mfp_validate_api_command("v-add-mail-account-forward", ["arg1" => "user1", "arg4" => "lazy@gmail.com"], "user1", "admin"), false);
 assert_case("API external catchall blocked for user1", hst_mfp_validate_api_command("v-add-mail-domain-catchall", ["arg1" => "user1", "arg3" => "lazy@gmail.com"], "user1", "admin"), false);
 assert_case("API positional gap-shift fwd (no arg4, arg5=gmail) blocked", hst_mfp_validate_api_command("v-add-mail-account-forward", ["arg1" => "user1", "arg2" => "user1.example", "arg3" => "sales", "arg5" => "evil@gmail.com"], "user1", "admin"), false);
 assert_case("API positional gap-shift catchall (no arg3, arg4=gmail) blocked", hst_mfp_validate_api_command("v-add-mail-domain-catchall", ["arg1" => "user1", "arg2" => "user1.example", "arg4" => "evil@gmail.com"], "user1", "admin"), false);
 assert_case("API empty target fails closed", hst_mfp_validate_api_command("v-add-mail-account-forward", ["arg1" => "user1", "arg2" => "user1.example", "arg3" => "sales"], "user1", "admin"), false);
-assert_case("API trailing external extra arg blocked", hst_mfp_validate_api_command("v-add-mail-account-forward", ["arg1" => "user1", "arg2" => "user1.example", "arg3" => "sales", "arg4" => "info@user1.example", "arg5" => "evil@gmail.com"], "user1", "admin"), false);
+assert_case("API trailing extra FORCE arg blocked", hst_mfp_validate_api_command("v-add-mail-account-forward", ["arg1" => "user1", "arg2" => "user1.example", "arg3" => "sales", "arg4" => "info@user1.example", "arg5" => "yes"], "user1", "admin"), false);
+assert_case("API invalid username fails closed", hst_mfp_validate_api_command("v-add-mail-account-forward", ["arg1" => "user1", "arg4" => "info@user1.example"], "../evil", "admin"), false);
 assert_case("API own fwd allowed for user1", hst_mfp_validate_api_command("v-add-mail-account-forward", ["arg1" => "user1", "arg2" => "user1.example", "arg3" => "sales", "arg4" => "info@user1.example"], "user1", "admin"), true);
 assert_case("API blackhole allowed for user1", hst_mfp_validate_api_command("v-add-mail-account-forward", ["arg1" => "user1", "arg2" => "user1.example", "arg3" => "sales", "arg4" => ":blackhole:"], "user1", "admin"), true);
+assert_case("API blackhole blocked for catchall", hst_mfp_validate_web_forwards([":blackhole:"], "user1", "catchall"), false);
 assert_case("API external allowed for secadmin", hst_mfp_validate_api_command("v-add-mail-account-forward", ["arg1" => "user1", "arg4" => "lazy@gmail.com"], "secadmin", "admin"), true);
 assert_case("API external allowed for root_user", hst_mfp_validate_api_command("v-add-mail-account-forward", ["arg1" => "user1", "arg4" => "lazy@gmail.com"], "admin", "admin"), true);
 
-// H) Suspended mail domain cannot be used as internal forward destination (#8)
-assert_case("suspended mail domain blocked", hst_mfp_validate_web_forwards(["sales@susp.example"], "user1", "forward"), false);
+// H) Suspended mail domain blocked in BOTH user and server scope, even if EXIM_DOMAINS_DIR exists (#H3/#T2)
+assert_case("suspended mail domain blocked (user scope)", hst_mfp_validate_web_forwards(["sales@susp.example"], "user1", "forward"), false);
+putenv("HESTIA_MFP_CONF=$conf_server");
+assert_case("suspended mail domain blocked (server scope)", hst_mfp_validate_web_forwards(["sales@susp.example"], "user1", "forward"), false);
+putenv("HESTIA_MFP_CONF=$conf_user");
+
+// I) Malformed ENABLED fails closed (#T2)
+$conf_typo = $argv[4] . "/conf_typo.conf";
+file_put_contents($conf_typo, "ENABLED=\"truee\"\nSCOPE=\"user\"\n");
+$typo_cfg = hst_mfp_load_config($conf_typo);
+if ($typo_cfg["enabled"] !== true) {
+    fwrite(STDERR, "FAIL: malformed ENABLED failed open\n");
+    exit(1);
+}
 
 echo "ALL_PHP_CASES_OK\n";
 ' "$MOCK_BIN" "$EXIM_FIX" "$HELPER_SRC" "$TEST_ROOT" 2>&1)
@@ -469,22 +492,24 @@ result_critical() { printf 'CRIT:%s:%s\n' "\$1" "\$2"; }
 EOF
 cat "$REPO_ROOT/scripts/security-audit/lib/system/mail.sh" >> "$S67_SCRIPT"
 
-s67_warn=$(HESTIA="$HESTIA_FIX" EXIM_DOMAINS_DIR="$EXIM_FIX" bash -c "source '$S67_SCRIPT'; check_mail" 2>&1)
-if printf '%s\n' "$s67_warn" | grep -q '^WARN:S67:Found 2 external mail forward/catch-all'; then
-    pass "v-security-audit S67 warns on active external forward + external catch-all"
+s67_warn=$(HESTIA="$HESTIA_FIX" HESTIA_HOME_ROOT="$HOME_FIX" EXIM_DOMAINS_DIR="$EXIM_FIX" bash -c "source '$S67_SCRIPT'; check_mail" 2>&1)
+if printf '%s\n' "$s67_warn" | grep -q '^WARN:S67:Found 4 external mail forward/catch-all' && \
+   printf '%s\n' "$s67_warn" | grep -q ', '; then
+    pass "v-security-audit S67 warns on external account, catch-all, .forward, and Sieve targets with comma-space samples"
 else
     fail "v-security-audit S67 did not warn as expected: $s67_warn"
 fi
 
+rm -f "$HOME_FIX/user2/.forward" "$HOME_FIX/user1/mail/user1.example/sales/sieve/custom.sieve"
 cat > "$HESTIA_FIX/data/users/user1/mail.conf" << 'EOF'
 DOMAIN='user1.example' CATCHALL='' SUSPENDED='no'
 EOF
 cat > "$HESTIA_FIX/data/users/user1/mail/user1.example.conf" << 'EOF'
 ACCOUNT='sales' FWD='info@user1.example,:blackhole:' FWD_ONLY='yes' SUSPENDED='no'
 EOF
-s67_pass=$(HESTIA="$HESTIA_FIX" EXIM_DOMAINS_DIR="$EXIM_FIX" bash -c "source '$S67_SCRIPT'; check_mail" 2>&1)
+s67_pass=$(HESTIA="$HESTIA_FIX" HESTIA_HOME_ROOT="$HOME_FIX" EXIM_DOMAINS_DIR="$EXIM_FIX" bash -c "source '$S67_SCRIPT'; check_mail" 2>&1)
 if printf '%s\n' "$s67_pass" | grep -q '^PASS:S67:No external mail forwards or external catch-all redirects found'; then
-    pass "v-security-audit S67 passes when only internal forwards and :blackhole: exist"
+    pass "v-security-audit S67 passes when only internal forwards and :blackhole: exist (and ignores symlinks)"
 else
     fail "v-security-audit S67 did not pass cleanly: $s67_pass"
 fi
@@ -615,13 +640,46 @@ if [ "$(id -u)" -eq 0 ]; then
 
     if [ "$vg_manual_rc" -ne 0 ] && [ "$vg_apt_rc" -eq 0 ] && \
        ! grep -q "hestia-mail-forward-policy" "$INST_HESTIA/web/add/mail/index.php" && \
-       [ -f "$INST_HESTIA/web/inc/mail_forward_policy.php" ] && \
+       [ ! -f "$INST_HESTIA/web/inc/mail_forward_policy.php" ] && \
+       [ -x "$INST_HESTIA/bin/v-mail-forward-policy" ] && \
        grep -q "^held_version=1.99.0$" "$INST_STATE/hestia-tools-version-hold.state"; then
-        pass "Top-level install.sh --mail-forward-policy enforces version gate on manual and --apt-hook runs"
+        pass "Top-level install.sh --mail-forward-policy enforces version gate on manual and --apt-hook runs without overwriting helper/UI"
     else
         fail "Version-gate enforcement failed (manual_rc=$vg_manual_rc apt_rc=$vg_apt_rc)"
     fi
 
+    # 6f. HIGH-T1: Native HestiaCP 1.11.0+ helper is preserved under hold & obsolete UI script is removed cleanly
+    printf '<?php\nfunction hst_validate_mail_forward_policy() { return null; }\n' > "$INST_HESTIA/web/inc/mail_forward_policy.php"
+    cp "$UI_SRC" "$INST_HESTIA/web/js/custom_scripts/mail-forward-policy-ui.php"
+    ui_nat_out=$(HESTIA_DIR_BIN="$INST_HESTIA/bin/" php -r 'define("HESTIA_DIR_BIN", $argv[1]); $_SERVER["REQUEST_URI"]="/add/mail/"; $_SESSION=["userContext"=>"user"]; include $argv[2];' "$INST_HESTIA/bin/" "$INST_HESTIA/web/js/custom_scripts/mail-forward-policy-ui.php" 2>&1 || true)
+    if HESTIA="$INST_HESTIA" MFP_CONF="$INST_CONF" APT_CONF_DIR="$INST_APT" MFP_BAK_DIR="$INST_BAK" \
+       HESTIA_TOOLS_CONF="$TEST_ROOT/no-tools.conf" HESTIA_TOOLS_STATE_DIR="$INST_STATE" \
+       HESTIA_TOOLS_HOLD_FILE="$INST_STATE/hestia-tools-version-hold.state" HESTIA_TOOLS_VERSION_LOG="$INST_STATE/version.log" \
+       bash "$SAFE_REPO_ROOT/install.sh" --mail-forward-policy --apt-hook >/dev/null 2>&1 && \
+       grep -q "hst_validate_mail_forward_policy" "$INST_HESTIA/web/inc/mail_forward_policy.php" && \
+       [ ! -e "$INST_HESTIA/web/js/custom_scripts/mail-forward-policy-ui.php" ] && \
+       [ -z "$ui_nat_out" ]; then
+        pass "HIGH-T1: Native 1.11.0+ helper is preserved across --apt-hook hold and obsolete UI hint is removed safely"
+    else
+        fail "HIGH-T1 native upgrade preservation check failed (ui_nat_out=$ui_nat_out)"
+    fi
+    rm -f "$INST_HESTIA/web/inc/mail_forward_policy.php"
+
+    # 6g. Generated DPkg::Post-Invoke hook parses cleanly in apt-config (if present) and executes under /bin/sh -c
+    apt_parse_ok=1
+    if command -v apt-config >/dev/null 2>&1; then
+        apt-config -c "$INST_APT/99hestia-mail-forward-policy" dump 2>/dev/null | grep -q 'DPkg::Post-Invoke' || apt_parse_ok=0
+    fi
+    hook_cmd=$(sed -n 's/^DPkg::Post-Invoke { "\(.*\)"; };$/\1/p' "$INST_APT/99hestia-mail-forward-policy" | sed 's/\\"/"/g')
+    sh_rc=0
+    /bin/sh -c "$hook_cmd" >/dev/null 2>&1 || sh_rc=$?
+    if [ "$apt_parse_ok" -eq 1 ] && [ -n "$hook_cmd" ] && [ "$sh_rc" -eq 0 ]; then
+        pass "MEDIUM-T3: Generated APT DPkg::Post-Invoke parses via apt-config and runs cleanly under /bin/sh -c"
+    else
+        fail "MEDIUM-T3: Generated APT hook failed (apt_parse_ok=$apt_parse_ok rc=$sh_rc)"
+    fi
+
+    # 6h. Missing helper fails closed in patched add/mail/index.php (#T2)
     if HESTIA="$INST_HESTIA" MFP_CONF="$INST_CONF" APT_CONF_DIR="$INST_APT" MFP_BAK_DIR="$INST_BAK" \
        HESTIA_TOOLS_CONF="$TEST_ROOT/no-tools.conf" HESTIA_TOOLS_STATE_DIR="$INST_STATE" \
        HESTIA_TOOLS_HOLD_FILE="$INST_STATE/hestia-tools-version-hold.state" HESTIA_TOOLS_VERSION_LOG="$INST_STATE/version.log" \
@@ -630,6 +688,15 @@ if [ "$(id -u)" -eq 0 ]; then
         pass "Top-level install.sh --mail-forward-policy --allow-untested-hestia overrides pin cleanly"
     else
         fail "--allow-untested-hestia override failed for --mail-forward-policy"
+    fi
+
+    mv "$INST_HESTIA/web/inc/mail_forward_policy.php" "$INST_HESTIA/web/inc/mail_forward_policy.php.hidden"
+    miss_out=$(php -r 'function _(string $s): string { return $s; } $_SESSION=["error_msg"=>""]; $_POST=["ok_acc"=>"1","v_fwd"=>"a@gmail.com"]; include $argv[1]; echo (!empty($_SESSION["error_msg"])) ? "FAIL_CLOSED" : "FAIL_OPEN";' "$INST_HESTIA/web/add/mail/index.php" 2>&1)
+    mv "$INST_HESTIA/web/inc/mail_forward_policy.php.hidden" "$INST_HESTIA/web/inc/mail_forward_policy.php"
+    if [ "$miss_out" = "FAIL_CLOSED" ]; then
+        pass "Missing mail_forward_policy.php fails closed inside patched add/mail/index.php"
+    else
+        fail "Missing helper failed open in add/mail/index.php: $miss_out"
     fi
 else
     pass "Skipped root-only installer sandbox tests (non-root user)"

@@ -643,8 +643,10 @@ check_root() {
 }
 
 hestia_user_list() {
-    if [ -d /usr/local/hestia/data/users ]; then
-        for u in /usr/local/hestia/data/users/*/; do
+    local hestia_root="${HESTIA:-/usr/local/hestia}"
+    if [ -d "${hestia_root}/data/users" ]; then
+        for u in "${hestia_root}/data/users"/*/; do
+            [ -d "$u" ] || continue
             basename "$u"
         done
     fi
@@ -652,7 +654,8 @@ hestia_user_list() {
 
 hestia_domain_list() {
     local user="$1"
-    local web_conf="/usr/local/hestia/data/users/${user}/web.conf"
+    local hestia_root="${HESTIA:-/usr/local/hestia}"
+    local web_conf="${hestia_root}/data/users/${user}/web.conf"
     if [ -f "$web_conf" ]; then
         grep "^DOMAIN=" "$web_conf" | cut -d"'" -f2
     fi

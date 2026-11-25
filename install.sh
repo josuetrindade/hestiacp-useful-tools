@@ -1,17 +1,17 @@
 #!/bin/bash
 
-# HestiaCP Custom Tools — Master Installer
+# HestiaCP Custom Tools - Master Installer
 # Installs scripts to /usr/local/hestia/bin and sets up configuration files in /etc
 #
 # Usage:
-#   bash install.sh                           — install all scripts + interactive setup wizard
-#   bash install.sh --setup-crons             — install all scripts + create/update cron entries
-#   bash install.sh --setup-crons --crowdsec  — install all + crons + CrowdSec IPS
-#   bash install.sh --all                     — install everything (all scripts + crons + CrowdSec)
-#   bash install.sh --fail2ban                — standalone: install & apply Fail2Ban email optimizer
+#   bash install.sh                           - install all scripts + interactive setup wizard
+#   bash install.sh --setup-crons             - install all scripts + create/update cron entries
+#   bash install.sh --setup-crons --crowdsec  - install all + crons + CrowdSec IPS
+#   bash install.sh --all                     - install everything (all scripts + crons + CrowdSec)
+#   bash install.sh --fail2ban                - standalone: install & apply Fail2Ban email optimizer
 #   bash install.sh --mail-forward-policy     - standalone: install & apply Mail Forward Policy
-#   bash install.sh --harden                  — standalone: install & apply Server Hardening (Pillars 1-5)
-#   bash install.sh --crowdsec                — standalone: install & apply Server Hardening + CrowdSec (Pillars 1-6)
+#   bash install.sh --harden                  - standalone: install & apply Server Hardening (Pillars 1-5)
+#   bash install.sh --crowdsec                - standalone: install & apply Server Hardening + CrowdSec (Pillars 1-6)
 
 set -o pipefail
 
@@ -134,7 +134,7 @@ if command -v flock >/dev/null 2>&1; then
     (umask 077 && : >> "$LOCK_FILE") 2>/dev/null || true
     exec 9>"$LOCK_FILE"
     if ! flock -n 9; then
-        echo "[INFO] Another HestiaCP tools installation is already in progress — skipping."
+        echo "[INFO] Another HestiaCP tools installation is already in progress - skipping."
         exit 0
     fi
 fi
@@ -168,8 +168,12 @@ if [ -n "$RUN_ONLY_MODULE" ]; then
     fi
 
     echo "Running single module: $RUN_ONLY_MODULE"
-    bash "$module_install" ${RUN_ONLY_ARGS[@]+"${RUN_ONLY_ARGS[@]}"} 9>&-
-    exit $?
+    mod_rc=0
+    bash "$module_install" ${RUN_ONLY_ARGS[@]+"${RUN_ONLY_ARGS[@]}"} 9>&- || mod_rc=$?
+    if [ "${HESTIA_APT_HOOK:-0}" = "1" ]; then
+        exit 0
+    fi
+    exit "$mod_rc"
 fi
 
 # ---------------------------------------------------------------------------
@@ -244,14 +248,14 @@ if ! echo "$backup_system" | grep -qE "b2|sftp|ftp|rclone" && [ -t 0 ]; then
     echo ""
     echo "Backups are currently saved to disk only (local)."
     echo "All features (folder organization, retention, reports)"
-    echo "work in local mode — no cloud account needed."
+    echo "work in local mode - no cloud account needed."
     echo ""
     echo "Optionally, you can also send copies to a remote destination:"
     echo ""
-    echo "  1) Local only      — backups stay on this server (default)"
-    echo "  2) Backblaze B2    — cheap cloud storage (~\$0.005/GB/month)"
-    echo "  3) SFTP            — backup to another server via SSH"
-    echo "  4) FTP             — classic FTP server"
+    echo "  1) Local only      - backups stay on this server (default)"
+    echo "  2) Backblaze B2    - cheap cloud storage (~\$0.005/GB/month)"
+    echo "  3) SFTP            - backup to another server via SSH"
+    echo "  4) FTP             - classic FTP server"
     echo ""
     read -rp "Choose [1-4] (default: 1): " backup_choice
     backup_choice=${backup_choice:-1}
@@ -279,7 +283,7 @@ if ! echo "$backup_system" | grep -qE "b2|sftp|ftp|rclone" && [ -t 0 ]; then
                     echo "     v-add-backup-host b2 $b2_bucket $b2_keyid YOUR_APP_KEY"
                 fi
             else
-                echo "  Skipped — missing credentials."
+                echo "  Skipped - missing credentials."
             fi
             unset b2_appkey
             ;;
@@ -390,8 +394,8 @@ if [ "$SETUP_CRONS" = true ]; then
 
     if [ ! -f "$CRON_FILE" ]; then
         cat > "$CRON_FILE" << 'CRONHEADER'
-# HestiaCP Custom Tools — Cron Schedule
-# Managed by install.sh — re-run with --setup-crons to update
+# HestiaCP Custom Tools - Cron Schedule
+# Managed by install.sh - re-run with --setup-crons to update
 SHELL=/bin/bash
 PATH=/usr/local/hestia/bin:/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
 

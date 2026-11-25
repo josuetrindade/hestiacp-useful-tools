@@ -309,7 +309,7 @@ write_file_if_changed() {
     dir="$(dirname "$dest")"
     base="$(basename "$dest")"
     install -d -m 0755 "$dir"
-    stage_tmp=$(mktemp "/run/.wfic.${base}.XXXXXX")
+    stage_tmp=$(umask 077 && mktemp "/run/.wfic.${base}.XXXXXX")
     chmod "$mode" "$stage_tmp"
     cat > "$stage_tmp"
     if [ -f "$dest" ] && cmp -s "$stage_tmp" "$dest"; then
@@ -594,8 +594,13 @@ if [ "$MODE" = "cron_heal" ]; then
     if [ -x /usr/local/hestia/bin/v-patch-nginx-txt-nocache ]; then
         /usr/local/hestia/bin/v-patch-nginx-txt-nocache >/dev/null 2>&1 || true
     fi
-    if [ -x /usr/local/hestia/bin/v-mail-forward-policy ] && [ -f /usr/local/hestia/web/inc/mail_forward_policy.php ] && [ ! -f /var/log/hestia/hestia-tools-version-hold.state ]; then
-        if ! /usr/local/hestia/bin/v-mail-forward-policy --status >/dev/null 2>&1; then
+    if [ -x /usr/local/hestia/bin/v-mail-forward-policy ] && [ -f /usr/local/hestia/web/inc/mail_forward_policy.php ]; then
+        if grep -q "hst_validate_mail_forward_policy" /usr/local/hestia/web/inc/mail_forward_policy.php 2>/dev/null; then
+            :
+        elif [ -f /var/log/hestia/hestia-tools-version-hold.state ]; then
+            held_ver="$(sed -n 's/^held_version=//p' /var/log/hestia/hestia-tools-version-hold.state 2>/dev/null | head -n1 || true)"
+            echo "[$(date -Is)] [INFO] Core patches on hold for HestiaCP '${held_ver:-unknown}'; skipping v-mail-forward-policy marker check"
+        elif ! /usr/local/hestia/bin/v-mail-forward-policy --status >/dev/null 2>&1; then
             echo "[$(date -Is)] [WARN] Mail Forward Policy hooks missing or degraded; run 'v-mail-forward-policy --status' or re-run install.sh --mail-forward-policy"
         fi
     fi
@@ -701,7 +706,7 @@ ClientAliveCountMax 2'
 
     local ssh_bak=""
     if [ -f "$SSH_DROPIN" ]; then
-        ssh_bak=$(mktemp /run/sshd-hardening.bak.XXXXXX)
+        ssh_bak=$(umask 077 && mktemp /run/sshd-hardening.bak.XXXXXX)
         cp "$SSH_DROPIN" "$ssh_bak"
     fi
 

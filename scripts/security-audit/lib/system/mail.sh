@@ -46,11 +46,12 @@ check_mail() {
         result_info "S36" "ClamAV is not running"
     fi
 
+    local hestia_root="${HESTIA:-/usr/local/hestia}"
     local total_mail_domains=0
     local dkim_configured=0
     local spf_configured=0
     for user in $(hestia_user_list); do
-        local mail_conf="/usr/local/hestia/data/users/${user}/mail.conf"
+        local mail_conf="${hestia_root}/data/users/${user}/mail.conf"
         if [ -f "$mail_conf" ]; then
             while IFS= read -r line; do
                 local domain
@@ -101,22 +102,27 @@ check_mail() {
     local ext_samples=()
     local server_dom_list=" "
     local u_item m_conf m_line m_dom m_fwd m_acc m_ca fwd_item fwd_dom
-    if [ -d "${EXIM_DOMAINS_DIR:-/etc/exim4/domains}" ]; then
+    for u_item in $(hestia_user_list); do
+        local u_conf_dom="${hestia_root}/data/users/${u_item}/user.conf"
+        if [ -f "$u_conf_dom" ] && grep -q "^SUSPENDED='yes'" "$u_conf_dom" 2>/dev/null; then
+            continue
+        fi
+        m_conf="${hestia_root}/data/users/${u_item}/mail.conf"
+        [ -f "$m_conf" ] || continue
+        while IFS= read -r m_line; do
+            echo "$m_line" | grep -q "SUSPENDED='yes'" && continue
+            m_dom=$(echo "$m_line" | grep -oE "DOMAIN='[^']*'" | cut -d"'" -f2 | tr '[:upper:]' '[:lower:]' | sed 's/\.*$//')
+            [ -n "$m_dom" ] && server_dom_list="${server_dom_list}${m_dom} "
+        done < "$m_conf"
+    done
+    if [ -z "${server_dom_list// /}" ] && [ -d "${EXIM_DOMAINS_DIR:-/etc/exim4/domains}" ]; then
         for d_path in "${EXIM_DOMAINS_DIR:-/etc/exim4/domains}"/*; do
             [ -d "$d_path" ] || continue
             server_dom_list="${server_dom_list}$(basename "$d_path" | tr '[:upper:]' '[:lower:]' | sed 's/\.*$//') "
         done
     fi
-    local hestia_root="${HESTIA:-/usr/local/hestia}"
-    for u_item in $(hestia_user_list); do
-        m_conf="${hestia_root}/data/users/${u_item}/mail.conf"
-        [ -f "$m_conf" ] || continue
-        while IFS= read -r m_line; do
-            m_dom=$(echo "$m_line" | grep -oE "DOMAIN='[^']*'" | cut -d"'" -f2 | tr '[:upper:]' '[:lower:]' | sed 's/\.*$//')
-            [ -n "$m_dom" ] && server_dom_list="${server_dom_list}${m_dom} "
-        done < "$m_conf"
-    done
 
+    local home_root="${HESTIA_HOME_ROOT:-/home}"
     for u_item in $(hestia_user_list); do
         local u_conf="${hestia_root}/data/users/${u_item}/user.conf"
         if [ -f "$u_conf" ] && grep -q "^SUSPENDED='yes'" "$u_conf" 2>/dev/null; then
@@ -131,7 +137,7 @@ check_mail() {
                     [ -n "$m_dom" ] && suspended_doms="${suspended_doms}${m_dom} "
                     continue
                 fi
-                m_ca=$(echo "$m_line" | grep -oE "CATCHALL='[^']*'" | cut -d"'" -f2 | xargs)
+                m_ca=$(echo "$m_line" | grep -oE "CATCHALL='[^']*'" | cut -d"'" -f2 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
                 [ -z "$m_ca" ] && continue
                 fwd_dom=$(printf '%s' "$m_ca" | awk -F'@' 'NF==2{print tolower($2)}' | sed 's/\.*$//')
                 if [ -z "$fwd_dom" ] || [[ "$server_dom_list" != *" ${fwd_dom} "* ]]; then
@@ -172,13 +178,50 @@ check_mail() {
                 done < "$dom_conf"
             done
         fi
+        local dot_fwd="${home_root}/${u_item}/.forward"
+        if [ -f "$dot_fwd" ] && [ ! -L "$dot_fwd" ]; then
+            while IFS= read -r m_line; do
+                m_line="${m_line#"${m_line%%[![:space:]]*}"}"
+                m_line="${m_line%"${m_line##*[![:space:]]}"}"
+                [ -z "$m_line" ] && continue
+                [[ "$m_line" == \#* ]] && continue
+                [[ "$m_line" == *"@"* ]] || continue
+                fwd_dom=$(printf '%s' "$m_line" | awk -F'@' 'NF==2{print tolower($2)}' | sed 's/\.*$//')
+                if [ -z "$fwd_dom" ] || [[ "$server_dom_list" != *" ${fwd_dom} "* ]]; then
+                    ext_count=$((ext_count + 1))
+                    if [ ${#ext_samples[@]} -lt 5 ]; then
+                        ext_samples+=("${u_item}/.forward->${m_line}")
+                    fi
+                fi
+            done < <(head -c 65536 "$dot_fwd" 2>/dev/null)
+        fi
+        local s_file s_target
+        for s_file in "${home_root}/${u_item}"/mail/*/*/.dovecot.sieve "${home_root}/${u_item}"/mail/*/*/sieve/*.sieve; do
+            [ -f "$s_file" ] && [ ! -L "$s_file" ] || continue
+            while IFS= read -r s_target; do
+                [ -n "$s_target" ] || continue
+                fwd_dom=$(printf '%s' "$s_target" | awk -F'@' 'NF==2{print tolower($2)}' | sed 's/\.*$//')
+                if [ -z "$fwd_dom" ] || [[ "$server_dom_list" != *" ${fwd_dom} "* ]]; then
+                    ext_count=$((ext_count + 1))
+                    if [ ${#ext_samples[@]} -lt 5 ]; then
+                        ext_samples+=("${u_item}:sieve->${s_target}")
+                    fi
+                fi
+            done < <(head -c 65536 "$s_file" 2>/dev/null | grep -oiE 'redirect([^;"]*:[a-z0-9_]+)*[[:space:]]+"[^"]+"' | sed -n 's/.*"\([^"]\+\)"$/\1/p' || true)
+        done
     done
 
     if [ "$ext_count" -eq 0 ]; then
         result_pass "S67" "No external mail forwards or external catch-all redirects found"
     else
-        local ext_sample_str
-        ext_sample_str=$(IFS=', '; echo "${ext_samples[*]}")
+        local ext_sample_str="" s_item
+        for s_item in "${ext_samples[@]}"; do
+            if [ -z "$ext_sample_str" ]; then
+                ext_sample_str="$s_item"
+            else
+                ext_sample_str="${ext_sample_str}, ${s_item}"
+            fi
+        done
         if [ "$ext_count" -gt "${#ext_samples[@]}" ]; then
             ext_sample_str="${ext_sample_str}, ..."
         fi
@@ -199,7 +242,7 @@ check_dns_mail_advanced() {
     local checked_domains=0
     local dmarc_configured=0
     for user in $(hestia_user_list); do
-        local mail_conf="/usr/local/hestia/data/users/${user}/mail.conf"
+        local mail_conf="${hestia_root}/data/users/${user}/mail.conf"
         if [ -f "$mail_conf" ]; then
             while IFS= read -r line; do
                 local domain
