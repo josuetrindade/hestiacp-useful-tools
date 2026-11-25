@@ -140,3 +140,10 @@ Look for emails sent by `www-data` or the user ID, not an SMTP login:
 sudo -n grep "U=www-data" /var/log/exim4/mainlog | head
 ```
 
+**Check for External Mail Forwards (IP Reputation Risk):**
+Audit mailboxes, Catch-Alls, `~/.forward` files, and Dovecot Sieve rules for redirects leaving the server (which forward spam out from your server IP):
+```bash
+sudo -n /usr/local/hestia/bin/v-mail-forward-policy --audit
+sudo -n /usr/local/hestia/bin/v-mail-forward-policy --status
+```
+

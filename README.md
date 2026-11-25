@@ -159,6 +159,7 @@ bash install.sh --setup-crons            # Configure recommended cron schedules 
 bash install.sh --harden                 # Run only the 5-pillar Server Hardening module
 bash install.sh --crowdsec               # Run Server Hardening + CrowdSec Collaborative IPS (6 pillars)
 bash install.sh --fail2ban               # Run only the Fail2Ban Email Optimizer
+bash install.sh --mail-forward-policy    # Run only the Mail Forward Policy module
 bash install.sh --allow-untested-hestia  # Override the HestiaCP 1.10.10 core-patch version pin (manual runs)
 ```
 
@@ -235,6 +236,7 @@ bash install.sh    # safe to re-run — configs are never overwritten
 Each tool can be installed standalone:
 ```bash
 bash scripts/backup-core-patches/install.sh
+bash scripts/mail-forward-policy/install.sh
 bash scripts/system-report/install.sh
 ```
 

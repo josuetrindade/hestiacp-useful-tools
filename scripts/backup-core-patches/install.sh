@@ -110,55 +110,17 @@ elif [ "$CORE_PATCH_GATE_RC" -ne 0 ]; then
 fi
 
 # 3.1 Ensure APT DPkg::Post-Invoke hook re-applies patches automatically after HestiaCP updates
-APT_HOOK_FILE="/etc/apt/apt.conf.d/99hestia-custom-patches"
+APT_CONF_DIR="${APT_CONF_DIR:-/etc/apt/apt.conf.d}"
+APT_HOOK_FILE="$APT_CONF_DIR/99hestia-custom-patches"
 REPO_ROOT="$(readlink -f "$SCRIPT_DIR/../.." 2>/dev/null || (cd "$SCRIPT_DIR/../.." && pwd))"
+APT_HOOK_LIB="$SCRIPT_DIR/../lib/apt-hook.sh"
 
-repo_tree_is_root_safe() {
-    local target="$1"
-    [[ "$target" =~ ^/[A-Za-z0-9_./-]+$ ]] || return 1
-    [[ "$target" != /tmp/* && "$target" != /var/tmp/* && "$target" != /dev/shm/* ]] || return 1
-    [ -d "$target" ] && [ -f "$target/install.sh" ] && [ ! -L "$target/install.sh" ] || return 1
-
-    # Verify every ancestor directory from / up to $target is root-owned and not group/world-writable
-    local cur="$target"
-    while true; do
-        [ ! -L "$cur" ] && [ -O "$cur" ] || return 1
-        local p
-        p="$(stat -c '%a' "$cur" 2>/dev/null || echo '777')"
-        [[ ! "$p" =~ [2367].$ && ! "$p" =~ [2367]$ ]] || return 1
-        [ "$cur" = "/" ] && break
-        cur="$(dirname "$cur")"
-    done
-
-    # Verify no file, subdirectory, or symlink inside $target is non-root-owned, a symlink, or group/world-writable
-    local unsafe
-    unsafe="$(find -P "$target" \( ! -user 0 -o -type l -o -perm /022 \) -print -quit 2>/dev/null || echo 'err')"
-    [ -z "$unsafe" ]
-}
-
-if [ -d "/etc/apt/apt.conf.d" ]; then
-    if [ -f "$REPO_ROOT/install.sh" ] && [ ! -L "$REPO_ROOT/install.sh" ] && repo_tree_is_root_safe "$REPO_ROOT"; then
-        tmp_apt_hook="$(mktemp /etc/apt/apt.conf.d/.99hestia-custom-patches.XXXXXX)"
-        cat > "$tmp_apt_hook" << APT_EOF
-// Managed by hestiacp-useful-tools (backup-core-patches)
-// Automatically re-applies HestiaCP custom patches after apt/dpkg package updates
-DPkg::Post-Invoke { "if [ -d '$REPO_ROOT' ] && [ ! -L '$REPO_ROOT' ] && [ -f '$REPO_ROOT/install.sh' ] && [ ! -L '$REPO_ROOT/install.sh' ] && [ -O '$REPO_ROOT' ] && [ -O '$REPO_ROOT/install.sh' ] && /bin/bash -c 'cur=$REPO_ROOT; while true; do [ ! -L \$cur ] && [ -O \$cur ] || exit 1; p=\$(stat -c %a \$cur 2>/dev/null || echo 777); [[ ! \$p =~ [2367].\$ && ! \$p =~ [2367]\$ ]] || exit 1; [ \$cur = / ] && break; cur=\$(dirname \$cur); done' && ! find -P '$REPO_ROOT' \( ! -user 0 -o -type l -o -perm /022 \) -print -quit 2>/dev/null | grep -q .; then /bin/bash '$REPO_ROOT/install.sh' --apt-hook </dev/null >/dev/null 2>&1 || true; fi"; };
-APT_EOF
-        chown root:root "$tmp_apt_hook"
-        chmod 0644 "$tmp_apt_hook"
-        if [ -f "$APT_HOOK_FILE" ] && cmp -s "$tmp_apt_hook" "$APT_HOOK_FILE"; then
-            rm -f "$tmp_apt_hook"
-            echo "  -> APT post-invoke hook already up to date: $APT_HOOK_FILE"
-        else
-            mv -f "$tmp_apt_hook" "$APT_HOOK_FILE"
-            echo "  -> Installed APT post-invoke auto-heal hook: $APT_HOOK_FILE"
-        fi
-    else
-        if [ -f "$APT_HOOK_FILE" ] || [ -L "$APT_HOOK_FILE" ]; then
-            rm -f "$APT_HOOK_FILE"
-            echo "  -> [WARN] Removed stale/unsafe APT hook: $APT_HOOK_FILE"
-        fi
-        echo "  -> [WARN] Skipped APT hook ($APT_HOOK_FILE): repo tree '$REPO_ROOT' and its ancestors must be root-owned, symlink-free, and non-world/group-writable"
+if [ -f "$APT_HOOK_LIB" ] && [ -d "$APT_CONF_DIR" ]; then
+    # shellcheck source=../lib/apt-hook.sh
+    source "$APT_HOOK_LIB"
+    install_hestia_apt_hook "$APT_HOOK_FILE" "backup-core-patches" "$REPO_ROOT" "--apt-hook"
+    if [ -f "$APT_HOOK_FILE" ] && { [ -f "$APT_CONF_DIR/99hestia-mail-forward-policy" ] || [ -L "$APT_CONF_DIR/99hestia-mail-forward-policy" ]; }; then
+        rm -f "$APT_CONF_DIR/99hestia-mail-forward-policy"
     fi
 fi
 

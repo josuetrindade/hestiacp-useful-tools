@@ -43,6 +43,9 @@ Balances Dovecot & Exim Fail2Ban thresholds (`2h` ban after `5` attempts via `.l
 ### 11. [nginx-txt-nocache](./nginx-txt-nocache/)
 Removes `.txt` from Nginx static `expires max` blocks across PHP-FPM templates, active domain configs, and reverse-proxy `PROXY_EXT` definitions so `robots.txt`, `llms.txt`, `ads.txt`, and `security.txt` always serve fresh content without 1-year browser/CDN caching.
 
+### 12. [mail-forward-policy](./mail-forward-policy/)
+Restricts non-admin HestiaCP users (and non-admin REST API keys) from adding external mail forwards or external Catch-All redirects to protect shared server IP reputation, while allowing administrators (including during user impersonation) to add exceptions. Includes panel UI guidance, upgrade-safe APT hooks, `v-mail-forward-policy --audit`, and `v-security-audit` (`S67`) detection.
+
 ---
 
 ## 🚀 How to Install Everything (The Easy Way)

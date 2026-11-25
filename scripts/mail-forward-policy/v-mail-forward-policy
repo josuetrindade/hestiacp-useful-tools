@@ -13,6 +13,7 @@ MFP_CONF="${MFP_CONF:-/etc/hestiacp-mail-forward-policy.conf}"
 HESTIA_HOME_ROOT="${HESTIA_HOME_ROOT:-/home}"
 EXIM_DOMAINS_DIR="${EXIM_DOMAINS_DIR:-/etc/exim4/domains}"
 MFP_BAK_DIR="${MFP_BAK_DIR:-/var/backups/hestiacp-useful-tools}"
+APT_CONF_DIR="${APT_CONF_DIR:-/etc/apt/apt.conf.d}"
 MFP_PHP_BIN="${MFP_PHP_BIN:-}"
 
 print_help() {
@@ -301,6 +302,13 @@ file_put_contents($dst, $out);
     if [ "$mode" = "disable" ]; then
         rm -f "$HESTIA/web/inc/mail_forward_policy.php" "$HESTIA/web/js/custom_scripts/mail-forward-policy-ui.php"
         echo "  -> [OK] Removed helper and UI hint files (preserved $MFP_CONF)"
+        if [ -f "$APT_CONF_DIR/99hestia-mail-forward-policy" ] || [ -L "$APT_CONF_DIR/99hestia-mail-forward-policy" ]; then
+            rm -f "$APT_CONF_DIR/99hestia-mail-forward-policy"
+            echo "  -> [OK] Removed standalone APT post-invoke hook: $APT_CONF_DIR/99hestia-mail-forward-policy"
+        fi
+        if [ -f "$APT_CONF_DIR/99hestia-custom-patches" ]; then
+            echo "  -> [INFO] Full toolkit APT hook ($APT_CONF_DIR/99hestia-custom-patches) is active; set ENABLED=\"no\" in $MFP_CONF to keep the policy inactive across future APT upgrades."
+        fi
     fi
 }
 

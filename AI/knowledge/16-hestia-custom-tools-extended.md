@@ -176,3 +176,35 @@ Clones or updates configured Git repositories into user `/home/<user>/git/<repo>
 `v-verify-backups` publishes presence/size/freshness metadata atomically. It does not read every backup block or prove application recovery. Failed or malformed Restic listings must not replace a previously known snapshot count with zero.
 
 See [backup operations and the recovery drill](11-hestia-backups.md), and the [module installation guide](../../scripts/backup-core-patches/README.md), for current flags, provider permissions and verification limits.
+
+---
+
+## v-mail-forward-policy
+
+Prevents non-admin HestiaCP users (and non-admin REST API keys) from adding external email forwards or external Catch-All redirects that forward incoming spam off-server and damage shared IP reputation. Administrators (`ROLE='admin'` or `$_SESSION['userContext'] === 'admin'` during "Log in as ..." user impersonation) and `:blackhole:` targets remain permitted.
+
+| Component | Path | Description |
+| :--- | :--- | :--- |
+| **CLI Script** | `/usr/local/hestia/bin/v-mail-forward-policy` | Hook patcher, status check, policy tester, and redirect auditor |
+| **Config** | `/etc/hestiacp-mail-forward-policy.conf` | Policy toggles (`0644 root:root` so `hestiaweb` reads it; zero secrets) |
+| **Helper PHP** | `/usr/local/hestia/web/inc/mail_forward_policy.php` | Shared web & API validator (fails closed on unreadable config) |
+| **UI Hint PHP** | `/usr/local/hestia/web/js/custom_scripts/mail-forward-policy-ui.php` | Informational banner for non-admin users in Add/Edit Mail screens |
+| **APT Hook (standalone)** | `/etc/apt/apt.conf.d/99hestia-mail-forward-policy` | Auto-heals hooks after APT updates when `99hestia-custom-patches` is absent |
+
+### Usage
+
+```bash
+v-mail-forward-policy --status              # Check config, helper files, and add/edit/api anchors
+v-mail-forward-policy --audit               # Scan mail.conf, mail/<domain>.conf, ~/.forward, and Sieve
+v-mail-forward-policy --audit --json        # Machine-readable audit output (exit 2 if external found)
+v-mail-forward-policy --check user1 a@b.com # Test policy decision for a non-admin user (0=allow, 1=block)
+v-mail-forward-policy --apply               # Re-apply version-gated PHP hook anchors
+v-mail-forward-policy --disable             # Remove hooks, helpers, and standalone APT hook (keeps config)
+```
+
+### Configuration & Operational Hardening
+
+- **Scope modes (`SCOPE`):** `"user"` (default) permits only active non-suspended mail domains owned by that same HestiaCP user; `"server"` permits any active domain present in `/etc/exim4/domains/` or local `mail.conf` files. `ALLOWLIST_DOMAINS` adds optional comma-separated external exceptions.
+- **Preserving existing exceptions:** Non-admin mailbox edits compute newly added targets against `$data[$v_account]["FWD"]`; pre-existing admin-configured external forwards can be kept or removed while adding new external targets is blocked.
+- **Quota hardening (`MAIL_DOMAINS`):** HestiaCP's `v-add-mail-domain` does not verify public DNS/MX ownership. Set non-admin `MAIL_DOMAINS` quotas to match each account's real domain count (never `unlimited`) so a user cannot temporarily add `gmail.com`, create a forward, and delete the domain.
+- **Monitoring & APT safety:** `v-security-audit --system` reports active external account forwards and Catch-Alls as check `S67`. Core PHP hook updates follow `scripts/lib/version-gate.sh` (holding automatically during untested HestiaCP APT upgrades).

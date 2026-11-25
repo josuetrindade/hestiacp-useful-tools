@@ -4,6 +4,33 @@
 
 set -euo pipefail
 
+print_usage() {
+    cat << 'EOF'
+Usage: install.sh [OPTIONS]
+
+Options:
+  --allow-untested-hestia  Override the HestiaCP version pin for manual runs
+  --apt-hook               Internal APT post-invoke mode (holds core PHP hooks on version mismatch)
+  --help, -h               Show this help message
+EOF
+}
+
+for arg in "$@"; do
+    case "$arg" in
+        --allow-untested-hestia) export ALLOW_UNTESTED_HESTIA=1 ;;
+        --apt-hook)              export HESTIA_APT_HOOK=1 ;;
+        --help|-h)
+            print_usage
+            exit 0
+            ;;
+        *)
+            echo "ERROR: Unknown option: $arg" >&2
+            print_usage >&2
+            exit 1
+            ;;
+    esac
+done
+
 if [ "$EUID" -ne 0 ]; then
     echo "ERROR: Please run as root (or use sudo)" >&2
     exit 1
@@ -12,14 +39,9 @@ fi
 export HESTIA="${HESTIA:-/usr/local/hestia}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HESTIA_BIN="$HESTIA/bin"
-CONF_FILE="/etc/hestiacp-mail-forward-policy.conf"
-
-for arg in "$@"; do
-    case "$arg" in
-        --allow-untested-hestia) export ALLOW_UNTESTED_HESTIA=1 ;;
-        --apt-hook)              export HESTIA_APT_HOOK=1 ;;
-    esac
-done
+CONF_FILE="${MFP_CONF:-/etc/hestiacp-mail-forward-policy.conf}"
+APT_CONF_DIR="${APT_CONF_DIR:-/etc/apt/apt.conf.d}"
+export MFP_CONF="$CONF_FILE"
 
 VERSION_GATE_LIB="$SCRIPT_DIR/../lib/version-gate.sh"
 CORE_PATCH_GATE_RC=0
@@ -39,7 +61,9 @@ install_root_file() {
     local mode="$1"
     local src="$2"
     local dst="$3"
-    install -d -m 0755 -o root -g root "$(dirname "$dst")"
+    local parent
+    parent="$(dirname "$dst")"
+    [ -d "$parent" ] || install -d -m 0755 -o root -g root "$parent"
     rm -f "$dst"
     install -o root -g root -m "$mode" "$src" "$dst"
 }
@@ -68,3 +92,18 @@ if [ "$CORE_PATCH_GATE_RC" -eq 0 ]; then
 else
     echo "  -> [INFO] Skipped core PHP hook mutations (version gate held); standalone CLI/helper updated"
 fi
+
+APT_HOOK_LIB="$SCRIPT_DIR/../lib/apt-hook.sh"
+REPO_ROOT="$(readlink -f "$SCRIPT_DIR/../.." 2>/dev/null || (cd "$SCRIPT_DIR/../.." && pwd))"
+if [ -f "$APT_HOOK_LIB" ] && [ -d "$APT_CONF_DIR" ]; then
+    if [ -f "$APT_CONF_DIR/99hestia-custom-patches" ] && [ ! -L "$APT_CONF_DIR/99hestia-custom-patches" ]; then
+        rm -f "$APT_CONF_DIR/99hestia-mail-forward-policy"
+        echo "  -> [OK] APT post-invoke auto-heal covered by $APT_CONF_DIR/99hestia-custom-patches"
+    else
+        # shellcheck source=../lib/apt-hook.sh
+        source "$APT_HOOK_LIB"
+        install_hestia_apt_hook "$APT_CONF_DIR/99hestia-mail-forward-policy" "mail-forward-policy" "$REPO_ROOT" "--mail-forward-policy --apt-hook"
+    fi
+fi
+
+echo "  -> [TIP] Check status anytime with 'v-mail-forward-policy --status' or scan redirects with 'v-mail-forward-policy --audit'"

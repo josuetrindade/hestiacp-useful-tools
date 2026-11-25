@@ -29,7 +29,12 @@ if ! command -v php >/dev/null 2>&1; then
 fi
 
 TEST_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/mfp-test.XXXXXX")
-trap 'rm -rf "$TEST_ROOT"' EXIT
+SAFE_REPO_ROOT=""
+cleanup() {
+    rm -rf "$TEST_ROOT"
+    [ -n "$SAFE_REPO_ROOT" ] && rm -rf "$SAFE_REPO_ROOT"
+}
+trap cleanup EXIT
 
 HELPER_SRC="$REPO_ROOT/scripts/mail-forward-policy/inc/mail_forward_policy.php"
 UI_SRC="$REPO_ROOT/scripts/mail-forward-policy/custom_scripts/mail-forward-policy-ui.php"
@@ -482,6 +487,152 @@ if printf '%s\n' "$s67_pass" | grep -q '^PASS:S67:No external mail forwards or e
     pass "v-security-audit S67 passes when only internal forwards and :blackhole: exist"
 else
     fail "v-security-audit S67 did not pass cleanly: $s67_pass"
+fi
+
+# 6. CLI flag parsing & end-to-end installer / APT hook / version-gate tests
+help_out=$(bash "$REPO_ROOT/install.sh" --help 2>&1)
+mod_help_out=$(bash "$REPO_ROOT/scripts/mail-forward-policy/install.sh" --help 2>&1)
+bad_combo_rc=0
+bash "$REPO_ROOT/install.sh" --mail-forward-policy --all >/dev/null 2>&1 || bad_combo_rc=$?
+bad_mod_rc=0
+bash "$REPO_ROOT/scripts/mail-forward-policy/install.sh" --no-such-flag >/dev/null 2>&1 || bad_mod_rc=$?
+if printf '%s' "$help_out" | grep -q -- '--mail-forward-policy' && \
+   printf '%s' "$mod_help_out" | grep -q -- '--allow-untested-hestia' && \
+   [ "$bad_combo_rc" -ne 0 ] && [ "$bad_mod_rc" -ne 0 ]; then
+    pass "Top-level and module installers expose expected flags and reject invalid flag combinations"
+else
+    fail "Installer CLI flag validation failed (combo=$bad_combo_rc mod=$bad_mod_rc)"
+fi
+
+if [ "$(id -u)" -eq 0 ]; then
+    # Shared apt-hook lib must be bash -n clean too
+    if bash -n "$REPO_ROOT/scripts/lib/apt-hook.sh"; then
+        pass "scripts/lib/apt-hook.sh passes bash -n"
+    else
+        fail "scripts/lib/apt-hook.sh failed bash -n"
+    fi
+
+    SAFE_BASE="/run"
+    [ -d "$SAFE_BASE" ] && [ -w "$SAFE_BASE" ] || SAFE_BASE="/var/lock"
+    SAFE_REPO_ROOT=$(mktemp -d "${SAFE_BASE}/mfp-repo.XXXXXX")
+    chmod 0755 "$SAFE_REPO_ROOT"
+    mkdir -p "$SAFE_REPO_ROOT/scripts/lib" "$SAFE_REPO_ROOT/scripts/mail-forward-policy"
+    cp "$REPO_ROOT/install.sh" "$SAFE_REPO_ROOT/install.sh"
+    cp -r "$REPO_ROOT/scripts/lib/." "$SAFE_REPO_ROOT/scripts/lib/"
+    cp -r "$REPO_ROOT/scripts/mail-forward-policy/." "$SAFE_REPO_ROOT/scripts/mail-forward-policy/"
+    chown -R root:root "$SAFE_REPO_ROOT"
+    chmod -R u+rwX,go-w "$SAFE_REPO_ROOT"
+    find "$SAFE_REPO_ROOT" -type l -delete
+
+    INST_HESTIA="$TEST_ROOT/inst_hestia"
+    INST_CONF="$TEST_ROOT/etc/hestiacp-mail-forward-policy.conf"
+    INST_APT="$TEST_ROOT/apt.conf.d"
+    INST_BAK="$TEST_ROOT/inst_bak"
+    INST_STATE="$TEST_ROOT/inst_state"
+    mkdir -p "$INST_HESTIA/bin" "$INST_HESTIA/conf" "$INST_HESTIA/web/add/mail" "$INST_HESTIA/web/edit/mail" "$INST_HESTIA/web/api" \
+             "$INST_HESTIA/web/inc" "$INST_HESTIA/web/js/custom_scripts" "$TEST_ROOT/etc" "$INST_APT" "$INST_BAK" "$INST_STATE"
+
+    cp "$TEST_ROOT/orig_add.php" "$INST_HESTIA/web/add/mail/index.php"
+    cp "$TEST_ROOT/orig_edit.php" "$INST_HESTIA/web/edit/mail/index.php"
+    cp "$TEST_ROOT/orig_api.php" "$INST_HESTIA/web/api/index.php"
+    printf "VERSION='1.10.10'\n" > "$INST_HESTIA/conf/hestia.conf"
+
+    # 6a. Fresh standalone module install creates 0644 config, patches core files, and installs standalone APT hook
+    if HESTIA="$INST_HESTIA" MFP_CONF="$INST_CONF" APT_CONF_DIR="$INST_APT" MFP_BAK_DIR="$INST_BAK" \
+       bash "$SAFE_REPO_ROOT/scripts/mail-forward-policy/install.sh" >/dev/null 2>&1 && \
+       [ "$(stat -c '%a' "$INST_HESTIA/bin/v-mail-forward-policy")" = "755" ] && \
+       [ "$(stat -c '%a' "$INST_CONF")" = "644" ] && \
+       grep -q '^ENABLED="yes"' "$INST_CONF" && \
+       grep -q '^SCOPE="user"' "$INST_CONF" && \
+       [ "$(stat -c '%a' "$INST_HESTIA/web/inc/mail_forward_policy.php")" = "644" ] && \
+       [ "$(stat -c '%a' "$INST_HESTIA/web/js/custom_scripts/mail-forward-policy-ui.php")" = "644" ] && \
+       php -l "$INST_HESTIA/web/add/mail/index.php" >/dev/null 2>&1 && \
+       php -l "$INST_HESTIA/web/edit/mail/index.php" >/dev/null 2>&1 && \
+       php -l "$INST_HESTIA/web/api/index.php" >/dev/null 2>&1 && \
+       HESTIA="$INST_HESTIA" MFP_CONF="$INST_CONF" APT_CONF_DIR="$INST_APT" "$INST_HESTIA/bin/v-mail-forward-policy" --status >/dev/null 2>&1 && \
+       [ -f "$INST_APT/99hestia-mail-forward-policy" ] && \
+       [ "$(stat -c '%a' "$INST_APT/99hestia-mail-forward-policy")" = "644" ] && \
+       grep -q -- '--mail-forward-policy --apt-hook' "$INST_APT/99hestia-mail-forward-policy"; then
+        pass "Standalone install.sh deploys CLI/config/helpers, passes --status, and installs standalone APT hook"
+    else
+        fail "Standalone module install.sh verification failed"
+    fi
+
+    # 6b. Re-run preserves customized config and heals 0600 permission drift back to 0644
+    printf 'ENABLED="yes"\nSCOPE="server"\nALLOWLIST_DOMAINS="partner.example"\n' > "$INST_CONF"
+    chmod 0600 "$INST_CONF"
+    if HESTIA="$INST_HESTIA" MFP_CONF="$INST_CONF" APT_CONF_DIR="$INST_APT" MFP_BAK_DIR="$INST_BAK" \
+       bash "$SAFE_REPO_ROOT/scripts/mail-forward-policy/install.sh" >/dev/null 2>&1 && \
+       [ "$(stat -c '%a' "$INST_CONF")" = "644" ] && \
+       grep -q '^SCOPE="server"' "$INST_CONF" && \
+       grep -q '^ALLOWLIST_DOMAINS="partner.example"' "$INST_CONF"; then
+        pass "Installer re-run preserves customized config values and heals 0600 mode back to 0644"
+    else
+        fail "Installer re-run failed to preserve config or heal 0644 mode"
+    fi
+
+    # 6c. --disable cleans up standalone APT hook and restores core PHP byte-for-byte while preserving config
+    if HESTIA="$INST_HESTIA" MFP_CONF="$INST_CONF" APT_CONF_DIR="$INST_APT" MFP_BAK_DIR="$INST_BAK" \
+       "$INST_HESTIA/bin/v-mail-forward-policy" --disable >/dev/null 2>&1 && \
+       [ ! -e "$INST_APT/99hestia-mail-forward-policy" ] && \
+       [ -f "$INST_CONF" ] && \
+       cmp -s "$TEST_ROOT/orig_add.php" "$INST_HESTIA/web/add/mail/index.php" && \
+       cmp -s "$TEST_ROOT/orig_edit.php" "$INST_HESTIA/web/edit/mail/index.php" && \
+       cmp -s "$TEST_ROOT/orig_api.php" "$INST_HESTIA/web/api/index.php"; then
+        pass "--disable removes standalone APT hook, restores core PHP byte-for-byte, and preserves config"
+    else
+        fail "--disable standalone cleanup failed"
+    fi
+
+    # 6d. Coexistence: when 99hestia-custom-patches is present, standalone hook is omitted and full hook kept untouched
+    printf '// full-toolkit\n' > "$INST_APT/99hestia-custom-patches"
+    if HESTIA="$INST_HESTIA" MFP_CONF="$INST_CONF" APT_CONF_DIR="$INST_APT" MFP_BAK_DIR="$INST_BAK" \
+       bash "$SAFE_REPO_ROOT/scripts/mail-forward-policy/install.sh" >/dev/null 2>&1 && \
+       [ ! -e "$INST_APT/99hestia-mail-forward-policy" ] && \
+       [ "$(cat "$INST_APT/99hestia-custom-patches")" = "// full-toolkit" ]; then
+        pass "Installer avoids duplicate APT hook when 99hestia-custom-patches is already active"
+    else
+        fail "Installer did not defer cleanly to existing 99hestia-custom-patches"
+    fi
+    rm -f "$INST_APT/99hestia-custom-patches"
+
+    # 6e. Version-gate enforcement via top-level install.sh --mail-forward-policy
+    HESTIA="$INST_HESTIA" MFP_CONF="$INST_CONF" APT_CONF_DIR="$INST_APT" MFP_BAK_DIR="$INST_BAK" \
+        "$INST_HESTIA/bin/v-mail-forward-policy" --disable >/dev/null 2>&1
+    printf "VERSION='1.99.0'\n" > "$INST_HESTIA/conf/hestia.conf"
+
+    vg_manual_rc=0
+    HESTIA="$INST_HESTIA" MFP_CONF="$INST_CONF" APT_CONF_DIR="$INST_APT" MFP_BAK_DIR="$INST_BAK" \
+    HESTIA_TOOLS_CONF="$TEST_ROOT/no-tools.conf" HESTIA_TOOLS_STATE_DIR="$INST_STATE" \
+    HESTIA_TOOLS_HOLD_FILE="$INST_STATE/hestia-tools-version-hold.state" HESTIA_TOOLS_VERSION_LOG="$INST_STATE/version.log" \
+        bash "$SAFE_REPO_ROOT/install.sh" --mail-forward-policy >/dev/null 2>&1 || vg_manual_rc=$?
+
+    vg_apt_rc=0
+    HESTIA="$INST_HESTIA" MFP_CONF="$INST_CONF" APT_CONF_DIR="$INST_APT" MFP_BAK_DIR="$INST_BAK" \
+    HESTIA_TOOLS_CONF="$TEST_ROOT/no-tools.conf" HESTIA_TOOLS_STATE_DIR="$INST_STATE" \
+    HESTIA_TOOLS_HOLD_FILE="$INST_STATE/hestia-tools-version-hold.state" HESTIA_TOOLS_VERSION_LOG="$INST_STATE/version.log" \
+        bash "$SAFE_REPO_ROOT/install.sh" --mail-forward-policy --apt-hook >/dev/null 2>&1 || vg_apt_rc=$?
+
+    if [ "$vg_manual_rc" -ne 0 ] && [ "$vg_apt_rc" -eq 0 ] && \
+       ! grep -q "hestia-mail-forward-policy" "$INST_HESTIA/web/add/mail/index.php" && \
+       [ -f "$INST_HESTIA/web/inc/mail_forward_policy.php" ] && \
+       grep -q "^held_version=1.99.0$" "$INST_STATE/hestia-tools-version-hold.state"; then
+        pass "Top-level install.sh --mail-forward-policy enforces version gate on manual and --apt-hook runs"
+    else
+        fail "Version-gate enforcement failed (manual_rc=$vg_manual_rc apt_rc=$vg_apt_rc)"
+    fi
+
+    if HESTIA="$INST_HESTIA" MFP_CONF="$INST_CONF" APT_CONF_DIR="$INST_APT" MFP_BAK_DIR="$INST_BAK" \
+       HESTIA_TOOLS_CONF="$TEST_ROOT/no-tools.conf" HESTIA_TOOLS_STATE_DIR="$INST_STATE" \
+       HESTIA_TOOLS_HOLD_FILE="$INST_STATE/hestia-tools-version-hold.state" HESTIA_TOOLS_VERSION_LOG="$INST_STATE/version.log" \
+       bash "$SAFE_REPO_ROOT/install.sh" --mail-forward-policy --allow-untested-hestia >/dev/null 2>&1 && \
+       HESTIA="$INST_HESTIA" MFP_CONF="$INST_CONF" APT_CONF_DIR="$INST_APT" "$INST_HESTIA/bin/v-mail-forward-policy" --status >/dev/null 2>&1; then
+        pass "Top-level install.sh --mail-forward-policy --allow-untested-hestia overrides pin cleanly"
+    else
+        fail "--allow-untested-hestia override failed for --mail-forward-policy"
+    fi
+else
+    pass "Skipped root-only installer sandbox tests (non-root user)"
 fi
 
 echo ""

@@ -67,4 +67,4 @@ bash install.sh --harden
 bash install.sh --crowdsec
 ```
 
-When `bash install.sh --setup-crons` is enabled, a daily silent self-healing check (`v-harden-server --cron-heal`) runs at `04:50` (right after HestiaCP's `04:41` auto-update) to resync IPv6 rules, heal any Fail2Ban chain desync, sync `nginx.conf_hardening` and `v-patch-nginx-txt-nocache` across newly added domains, and verify CrowdSec + SSH anti-lockout rules.
+When `bash install.sh --setup-crons` is enabled, a daily silent self-healing check (`v-harden-server --cron-heal`) runs at `04:50` (right after HestiaCP's `04:41` auto-update) to resync IPv6 rules, heal any Fail2Ban chain desync, sync `nginx.conf_hardening` and `v-patch-nginx-txt-nocache` across newly added domains, check `v-mail-forward-policy --status` for unexpected hook drift (when installed and not held by `version-gate.sh`), and verify CrowdSec + SSH anti-lockout rules.

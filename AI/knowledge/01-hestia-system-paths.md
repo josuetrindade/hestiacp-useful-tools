@@ -127,7 +127,12 @@ This reference document maps the verified system paths for HestiaCP running on D
 | **Backup Verifier** | `/usr/local/hestia/bin/v-verify-backups` | Verifies remote B2/rclone or local `.tar` archive existence, byte size, and freshness |
 | **Backup Verify Status** | `/var/log/hestia/backup-verify.status` | Machine-readable verification status written by `v-verify-backups` |
 | **Remote Backup Config** | `/usr/local/hestia/conf/b2.backup.conf` | Native Hestia B2 remote backup configuration when B2 is enabled |
-| **Backup APT Hook** | `/etc/apt/apt.conf.d/99hestia-custom-patches` | `DPkg::Post-Invoke` hook that auto-reapplies `backup-core-patches` after HestiaCP APT updates |
+| **Backup APT Hook** | `/etc/apt/apt.conf.d/99hestia-custom-patches` | `DPkg::Post-Invoke` hook that auto-reapplies version-gated toolkit core patches (`backup-core-patches`, `mail-forward-policy`, `nginx-txt-nocache`) after HestiaCP APT updates |
+| **Mail Forward Policy CLI** | `/usr/local/hestia/bin/v-mail-forward-policy` | Manages non-admin external mail forward restrictions (`--apply`, `--status`, `--audit`, `--check`, `--disable`) |
+| **Mail Forward Policy Conf** | `/etc/hestiacp-mail-forward-policy.conf` | Policy settings (`ENABLED`, `SCOPE`, `BLOCK_CATCHALL`, `ENFORCE_API`, `ALLOWLIST_DOMAINS`, mode `0644 root:root` so `hestiaweb` can read it) |
+| **Mail Forward Helper PHP** | `/usr/local/hestia/web/inc/mail_forward_policy.php` | Web & API policy validator invoked by patched `add/mail`, `edit/mail`, and `api` entrypoints |
+| **Mail Forward UI Hint PHP** | `/usr/local/hestia/web/js/custom_scripts/mail-forward-policy-ui.php` | Non-admin panel notice rendered under `Forward to` and `Catch-All Email` inputs |
+| **Mail Forward APT Hook** | `/etc/apt/apt.conf.d/99hestia-mail-forward-policy` | Standalone `DPkg::Post-Invoke` hook when `mail-forward-policy` is installed without `99hestia-custom-patches` |
 | **GitHub Mirror** | `/usr/local/hestia/bin/v-github-mirror` | Zero-Trust root-staged Git sync script |
 | **GitHub Config** | `/etc/hestiacp-github-mirror.conf` | Git mirror configuration (`0600 root:root`) |
 | **GitHub Token** | `/etc/hestiacp-github-mirror.token` | Optional Fine-Grained Read-Only PAT (`0400`/`0600 root:root`) for HTTPS pull-only sync |

@@ -594,6 +594,11 @@ if [ "$MODE" = "cron_heal" ]; then
     if [ -x /usr/local/hestia/bin/v-patch-nginx-txt-nocache ]; then
         /usr/local/hestia/bin/v-patch-nginx-txt-nocache >/dev/null 2>&1 || true
     fi
+    if [ -x /usr/local/hestia/bin/v-mail-forward-policy ] && [ -f /usr/local/hestia/web/inc/mail_forward_policy.php ] && [ ! -f /var/log/hestia/hestia-tools-version-hold.state ]; then
+        if ! /usr/local/hestia/bin/v-mail-forward-policy --status >/dev/null 2>&1; then
+            echo "[$(date -Is)] [WARN] Mail Forward Policy hooks missing or degraded; run 'v-mail-forward-policy --status' or re-run install.sh --mail-forward-policy"
+        fi
+    fi
     if systemctl is-enabled --quiet crowdsec-firewall-bouncer 2>/dev/null; then
         systemctl is-active --quiet crowdsec || systemctl restart crowdsec || true
         systemctl is-active --quiet crowdsec-firewall-bouncer || systemctl restart crowdsec-firewall-bouncer || true

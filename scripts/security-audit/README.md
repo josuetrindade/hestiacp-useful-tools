@@ -65,6 +65,7 @@ Audits the server infrastructure as root.
 | OS & Keys | Outdated Kernel, Failed SSH logins, Firewalls, Root Cron Job Hijack validation |
 | Fail2Ban | SSH jail, Recidive jail, WordPress jail presence, WordPress filter wp-login.php coverage |
 | Fail2Ban Sync | Detects desync between Fail2Ban ban database and actual iptables rules (can happen after panel updates) |
+| Mail | Open relay check (S35), From: header anti-spoofing (S66), ClamAV freshness (S36), DKIM/SPF checks (S37/S38), external mail forward & Catch-All audit (S67) |
 | WordPress | Verifies every WP site has an nginx `conf_xmlrpc` block file preventing brute-force via `system.multicall` |
 | Kernel | ASLR, SYN cookies, source routing, core dumps, CVE Profiling (Dirty COW / Dirty Pipe) |
 

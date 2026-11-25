@@ -87,7 +87,7 @@ check_hestia_core_patch_compatibility() {
                         echo "HestiaCP updated to version '${detected:-unknown}' on $(hostname -f 2>/dev/null || hostname 2>/dev/null || echo 'server')."
                         echo ""
                         echo "hestiacp-useful-tools core file patches are pinned to HestiaCP ${SUPPORTED_HESTIA_VERSION} and have been safely held so upstream files are not overwritten blindly."
-                        echo "Standalone scripts (v-harden-server, v-restic-manager, v-verify-backups, v-security-audit, v-clean-garbage, custom JS) remain active."
+                        echo "Standalone scripts (v-harden-server, v-restic-manager, v-verify-backups, v-security-audit, v-clean-garbage, v-mail-forward-policy --audit/--check, custom JS) remain active."
                         echo ""
                         echo "Next step: review and update hestiacp-useful-tools for HestiaCP ${detected:-unknown}, then re-run install.sh."
                     } | "$sendmail_bin" -s "[HOLD] HestiaCP ${detected:-unknown}: hestiacp-useful-tools awaiting update" "$admin_email" "yes" >/dev/null 2>&1 || true

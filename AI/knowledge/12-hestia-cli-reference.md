@@ -387,6 +387,7 @@ This list reflects the verified binaries in `/usr/local/hestia/bin/`.
 - `v-log-user-logout`: Log logout.
 
 ### M-R
+- `v-mail-forward-policy`: **CUSTOM:** Restrict non-admin external mail forwards & Catch-Alls; audit existing redirects (`--status`, `--audit`, `--check`, `--apply`, `--disable`).
 - `v-move-fs-directory`: Move dir.
 - `v-move-fs-file`: Move file.
 - `v-open-fs-config`: Read config file.
