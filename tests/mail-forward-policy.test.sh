@@ -302,13 +302,13 @@ assert_case("API blackhole blocked for catchall", hst_mfp_validate_web_forwards(
 assert_case("API external allowed for secadmin", hst_mfp_validate_api_command("v-add-mail-account-forward", ["arg1" => "user1", "arg4" => "lazy@gmail.com"], "secadmin", "admin"), true);
 assert_case("API external allowed for root_user", hst_mfp_validate_api_command("v-add-mail-account-forward", ["arg1" => "user1", "arg4" => "lazy@gmail.com"], "admin", "admin"), true);
 
-// H) Suspended mail domain blocked in BOTH user and server scope, even if EXIM_DOMAINS_DIR exists (#H3/#T2)
+// H) Suspended mail domain blocked in BOTH user and server scope, even if EXIM_DOMAINS_DIR exists
 assert_case("suspended mail domain blocked (user scope)", hst_mfp_validate_web_forwards(["sales@susp.example"], "user1", "forward"), false);
 putenv("HESTIA_MFP_CONF=$conf_server");
 assert_case("suspended mail domain blocked (server scope)", hst_mfp_validate_web_forwards(["sales@susp.example"], "user1", "forward"), false);
 putenv("HESTIA_MFP_CONF=$conf_user");
 
-// I) Malformed ENABLED fails closed (#T2)
+// I) Malformed ENABLED fails closed
 $conf_typo = $argv[4] . "/conf_typo.conf";
 file_put_contents($conf_typo, "ENABLED=\"truee\"\nSCOPE=\"user\"\n");
 $typo_cfg = hst_mfp_load_config($conf_typo);
@@ -649,7 +649,7 @@ if [ "$(id -u)" -eq 0 ]; then
         fail "Version-gate enforcement failed (manual_rc=$vg_manual_rc apt_rc=$vg_apt_rc)"
     fi
 
-    # 6f. HIGH-T1: Native HestiaCP 1.11.0+ helper is preserved under hold & obsolete UI script is removed cleanly
+    # 6f. Native HestiaCP 1.11.0+ helper is preserved under hold & obsolete UI script is removed cleanly
     printf '<?php\nfunction hst_validate_mail_forward_policy() { return null; }\n' > "$INST_HESTIA/web/inc/mail_forward_policy.php"
     cp "$UI_SRC" "$INST_HESTIA/web/js/custom_scripts/mail-forward-policy-ui.php"
     ui_nat_out=$(HESTIA_DIR_BIN="$INST_HESTIA/bin/" php -r 'define("HESTIA_DIR_BIN", $argv[1]); $_SERVER["REQUEST_URI"]="/add/mail/"; $_SESSION=["userContext"=>"user"]; include $argv[2];' "$INST_HESTIA/bin/" "$INST_HESTIA/web/js/custom_scripts/mail-forward-policy-ui.php" 2>&1 || true)
@@ -660,9 +660,9 @@ if [ "$(id -u)" -eq 0 ]; then
        grep -q "hst_validate_mail_forward_policy" "$INST_HESTIA/web/inc/mail_forward_policy.php" && \
        [ ! -e "$INST_HESTIA/web/js/custom_scripts/mail-forward-policy-ui.php" ] && \
        [ -z "$ui_nat_out" ]; then
-        pass "HIGH-T1: Native 1.11.0+ helper is preserved across --apt-hook hold and obsolete UI hint is removed safely"
+        pass "Native 1.11.0+ helper is preserved across --apt-hook hold and obsolete UI hint is removed safely"
     else
-        fail "HIGH-T1 native upgrade preservation check failed (ui_nat_out=$ui_nat_out)"
+        fail "Native upgrade preservation check failed (ui_nat_out=$ui_nat_out)"
     fi
     rm -f "$INST_HESTIA/web/inc/mail_forward_policy.php"
 
@@ -675,12 +675,12 @@ if [ "$(id -u)" -eq 0 ]; then
     sh_rc=0
     /bin/sh -c "$hook_cmd" >/dev/null 2>&1 || sh_rc=$?
     if [ "$apt_parse_ok" -eq 1 ] && [ -n "$hook_cmd" ] && [ "$sh_rc" -eq 0 ]; then
-        pass "MEDIUM-T3: Generated APT DPkg::Post-Invoke parses via apt-config and runs cleanly under /bin/sh -c"
+        pass "Generated APT DPkg::Post-Invoke parses via apt-config and runs cleanly under /bin/sh -c"
     else
-        fail "MEDIUM-T3: Generated APT hook failed (apt_parse_ok=$apt_parse_ok rc=$sh_rc)"
+        fail "Generated APT hook failed (apt_parse_ok=$apt_parse_ok rc=$sh_rc)"
     fi
 
-    # 6h. Missing helper fails closed in patched add/mail/index.php (#T2)
+    # 6h. Missing helper fails closed in patched add/mail/index.php
     if HESTIA="$INST_HESTIA" MFP_CONF="$INST_CONF" APT_CONF_DIR="$INST_APT" MFP_BAK_DIR="$INST_BAK" \
        HESTIA_TOOLS_CONF="$TEST_ROOT/no-tools.conf" HESTIA_TOOLS_STATE_DIR="$INST_STATE" \
        HESTIA_TOOLS_HOLD_FILE="$INST_STATE/hestia-tools-version-hold.state" HESTIA_TOOLS_VERSION_LOG="$INST_STATE/version.log" \
